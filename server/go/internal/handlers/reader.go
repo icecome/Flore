@@ -274,6 +274,11 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		// 文章留存清理
 		api.POST("/articles/cleanup", h.CleanupArticles)
 
+		// 诊断包
+		api.GET("/diagnostic/items", h.GetDiagnoseItems)
+		sensitive.POST("/diagnostic/generate", h.GenerateDiagnosticPackage)
+		sensitive.GET("/diagnostic/:path/download", h.ExtractDiagnosticPackage)
+
 		// 版本信息
 		api.GET("/version", h.GetVersion)
 	}

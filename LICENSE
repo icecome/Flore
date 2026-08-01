@@ -1,0 +1,194 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+  The licenses for most software and other practical works are designed
+to take away your freedom to share and change the works.  By contrast,
+the GNU General Public License is intended to guarantee your freedom to
+share and change all versions of a program--to make sure it remains free
+software for all its users.  We, the Free Software Foundation, use the
+GNU General Public License for most of our software; it applies also to
+any other work released this way and its successors.
+
+  The GNU General Public License applies to some of the other works
+released by the Free Software Foundation, and to other works released
+by the Free Software Foundation that are not covered by its own licenses.
+You are also welcome to redistribute it under the same terms.
+
+  The terms of this license are as follows:
+
+  0. Definitions.
+
+  "This License" means the GNU General Public License v3.0.
+
+  "The Program" means any copyrightable work licensed under this
+License.  Each licensee is addressed as "you".  "Licensees" and
+"recipients" may be individuals or organizations.
+
+  To "modify" a work means to copy from or adapt all or part of the work
+in a fashion requiring copyright permission, other than the making of an
+exact copy.  The resulting work is called a "modified version" of the
+earlier work or a "work based on" the earlier work.
+
+  A "covered work" means either the unmodified Program or a work based
+on it.
+
+  To "convey" a work means any kind of propagation that enables other
+parties to make or receive copies.  Mere interaction with a user through
+a computer network, with no transfer of a copy, is not conveying.
+
+  An interactive user interface displays "Appropriate Legal Notices"
+to the extent that it includes a convenient and prominently visible
+feature that (1) displays an appropriate copyright notice, and (2)
+tells the user that there is no warranty for the work (except to the
+extent that warranties are provided), that licensees may convey the
+work under this License, and how to view a copy of this License.  If
+the interface presents a list of user commands or options, such as a
+menu, a prominent item in the list meets this criterion.
+
+  1. Source Code.
+
+  The "source code" for a work means the preferred form of the work
+for making modifications to it.  "Object code" means any non-source
+form of a work.
+
+  A "Standard Interface" means an interface that either is an official
+standard defined by a recognized standards body, or, in the case of
+interfaces specified for a particular programming language, one that
+is widely used among developers working in that language.
+
+  The "System Libraries" of an executable work include anything, other
+than the work as a whole, that (a) is included in the normal form of
+packaging a Major Component, but which is not part of that Major
+Component, and (b) serves only to enable use of the work with that
+Major Component, or to implement a Standard Interface for which an
+implementation is available to the public in source code form.  A
+"Major Component", in this context, means a major component (core,
+kernel, window system, and so on) specific to an operating system
+(such as Linux, macOS, or Windows) or to a particular windowing system
+(such as X11 or Wayland) but which is not part of the source code of
+the work itself.
+
+  The "Corresponding Source" for a work in object code form means all
+the source code needed to generate, install, and (for an executable
+work) run the object code and to modify the work, including scripts to
+control those activities.  However, it does not include the work's
+System Libraries, or general-purpose tools or generally available free
+programs which are used unmodified in the course of those activities.
+
+  The "Source Form" of a work means the Corresponding Source in any
+form suitable for modifying the work, excluding any third-party
+components that are not subject to copyright.
+
+  2. Basic Permissions.
+
+  All rights granted under this License are granted for the term of
+copyright on the Program, and are irrevocable provided the terms
+are complied with.
+
+  You may copy, distribute and modify the Program, provided that:
+
+  (a) You must prominently and appropriately publish an announcement of
+  your changes;
+
+  (b) You must retain all copyright notices and license notices;
+
+  (c) You must state that you have modified the work;
+
+  (d) You must retain in the work the text of this License.
+
+  3. Protection of Users' Rights.
+
+  You may not impose any further restrictions on the exercise of the
+rights granted under this License, other than those set forth in
+this License.
+
+  4. Conveying Source Code.
+
+  You may convey a covered work in object code form under the terms
+of sections 2 and 3, provided that you also comply with sections
+2 and 3 for all source code you convey.
+
+  5. Additional Terms.
+
+  If you convey a copy of the Program and the above requirements
+apply, you may add additional terms to the copy.
+
+  6. Termination.
+
+  You may not propagate or modify a covered work except as expressly
+provided under this License.  Any attempt otherwise to propagate or
+modify it is void, and will automatically terminate your rights under
+this License.
+
+  7. Acceptance Required.
+
+  Each time you convey a covered work, you must accept the license
+from the original licensor.
+
+  8. No Surrender of Rights.
+
+  You are not required to accept this License in order to run or
+modify the Program, or works based on it.
+
+  9. Patents.
+
+  A "contributor" is a copyright holder who authorizes others to
+use, copy, modify, and distribute the Program.  Each contributor
+grants a patent license to all users of the Program.
+
+  10. Other Rights.
+
+  Nothing in this License is intended to grant any right to use
+trademarks, service marks, or logos.
+
+  11. Relevance of the Law.
+
+  If any provision of this License is held invalid or unenforceable,
+the invalid or unenforceable provision shall be held valid to the
+maximum extent permitted by law.
+
+  12. No Waiver.
+
+  The failure of a copyright holder to enforce a provision of this
+License shall not be construed as a waiver of that provision.
+
+  13. Revision of this License.
+
+  The Free Software Foundation may publish revised and/or new
+versions of the GNU General Public License from time to time.
+Newer versions of the License are published at
+https://www.gnu.org/licenses/
+
+  14. Use with the GNU Lesser General Public License.
+
+  This License does not permit combining the Program with code
+covered by the GNU Lesser General Public License.
+
+                        APPENDIX: How to apply these terms
+
+  To apply the GNU General Public License to your work, attach the
+following notices with a reference to this License:
+
+  Copyright (C) <year>  <name of author>
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <https://www.gnu.org/licenses/>.

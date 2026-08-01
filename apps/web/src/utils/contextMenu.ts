@@ -1,21 +1,11 @@
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { Folder, Item, Source } from '../types';
-import { getApi } from './api';
+import { getApi, openExternal } from './api';
 import { showToast } from './toast';
 
 // 通用：安全打开外部 URL（仅允许 http/https）
-export function safeOpenUrl(url: string): void {
-  try {
-    const u = new URL(url);
-    if (!['http:', 'https:'].includes(u.protocol)) {
-      showToast('仅支持 http/https 链接');
-      return;
-    }
-    window.open(u.href, '_blank', 'noopener,noreferrer');
-  } catch {
-    showToast('无效的 URL');
-  }
-}
+// 已合并到 openExternal（utils/api.ts），此处保留别名兼容
+export const safeOpenUrl = openExternal;
 
 // ---------- Sidebar: 订阅源 ----------
 

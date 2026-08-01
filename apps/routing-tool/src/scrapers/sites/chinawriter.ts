@@ -1,7 +1,5 @@
 import type { FetcherDefinition } from '../registry.js';
-import { BaseFetcher, type ScrapeResult } from '../base-fetcher.js';
-import * as cheerio from 'cheerio';
-import type { AnyNode } from 'domhandler';
+import { BaseFetcher, type ScrapeResult, cheerio, type AnyNode } from '../base-fetcher.js';
 
 /**
  * 中国作家网 - 新闻列表抓取器

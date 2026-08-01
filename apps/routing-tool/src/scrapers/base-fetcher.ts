@@ -2,6 +2,11 @@ import { ofetch } from 'ofetch';
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
 
+// 统一 re-export，供子类直接使用，避免各站点文件重复导入第三方依赖
+export { ofetch } from 'ofetch';
+export { cheerio };
+export type { AnyNode } from 'domhandler';
+
 export interface ScrapeResult {
   title: string;
   link: string;

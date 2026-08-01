@@ -1,0 +1,40 @@
+name: Desktop Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+
+jobs:
+  build-desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Go dependencies
+        run: cd server/go && go mod download
+
+      - name: Install desktop dependencies
+        run: cd apps/desktop && go mod download
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build:desktop
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flore-desktop
+          path: apps/desktop/build/Flore-portable/

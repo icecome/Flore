@@ -19,6 +19,7 @@ import (
 
 	"github.com/rss/go-server/internal/database"
 	"github.com/rss/go-server/internal/handlers"
+	"github.com/rss/go-server/internal/logging"
 	"github.com/rss/go-server/internal/services"
 )
 
@@ -44,9 +45,29 @@ func main() {
 		}
 		logFile = filepath.Join(filepath.Dir(dbPath), "flore-backend.log")
 	}
-	if f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, f), &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// 日志级别由 FLORE_LOG_LEVEL 环境变量控制，默认 Info
+	logLevel := slog.LevelInfo
+	if levelStr := os.Getenv("FLORE_LOG_LEVEL"); levelStr != "" {
+		if level, err := logging.ParseLogLevel(levelStr); err == nil {
+			logLevel = level
+		}
 	}
+
+	// 打开日志文件（追加模式）并配置轮转
+	logWriter, err := logging.NewRotatingWriter(logFile, 10<<20, 5)
+	if err != nil {
+		slog.Error("failed to open log file", "path", logFile, "error", err)
+		os.Exit(1)
+	}
+	defer logWriter.Close()
+
+	multiWriter := io.MultiWriter(os.Stderr, logWriter)
+	textHandler := slog.NewTextHandler(multiWriter, &slog.HandlerOptions{Level: logLevel})
+	handler := logging.NewDesensitizeHandler(textHandler)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+	slog.Info("backend log file", "path", logFile)
 	slog.Info("backend log file", "path", logFile)
 
 	if err := database.Init(); err != nil {

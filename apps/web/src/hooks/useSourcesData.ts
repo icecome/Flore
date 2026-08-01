@@ -4,6 +4,7 @@ import type { Source, Folder } from '../types';
 import type { AppSettings } from '../utils/settings';
 import { getApi } from '../utils/api.js';
 import { showToast } from '../utils/toast';
+import { fetchData } from '../utils/fetchData';
 
 export interface UseSourcesDataResult {
   sources: Source[];
@@ -32,9 +33,7 @@ export function useSourcesData(
   // 获取文件夹列表
   const fetchFolders = useCallback(async () => {
     try {
-      const res = await fetch(`${getApi()}/folders`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Folder[];
+      const data = await fetchData<Folder[]>('/folders', { cache: 'no-store' });
       setFolders(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch folders:', err);
@@ -46,9 +45,7 @@ export function useSourcesData(
   const fetchSources = useCallback(async () => {
     setLoadingSources(true);
     try {
-      const res = await fetch(`${getApi()}/sources`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Source[];
+      const data = await fetchData<Source[]>('/sources', { cache: 'no-store' });
       setSources(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch sources:', err);
@@ -80,7 +77,7 @@ export function useSourcesData(
       console.error('Failed to fetch unread count:', err);
       showToast('获取未读数失败');
     }
-  }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline]);
+  }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline, getApi, showToast]);
 
   // 初始加载
   useEffect(() => {
@@ -97,7 +94,7 @@ export function useSourcesData(
     if (badCount > 0) {
       showToast(`${badCount} 个订阅源异常，请在设置中查看详情`);
     }
-  }, [sources]);
+  }, [sources, showToast]);
 
   return {
     sources,

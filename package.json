@@ -2,7 +2,7 @@
   "name": "flore",
   "private": true,
   "version": "0.0.1-20260801",
-  "description": "Local-first RSS reader with desktop support",
+  "description": "纯本地 RSS 阅读器，附带桌面端支持",
   "scripts": {
     "dev": "concurrently \"npm run dev:go\" \"npm run dev:web\"",
     "dev:go": "cd server/go && go run ./cmd/main.go",

@@ -65,5 +65,17 @@
   "63": "tailwind.config.js",
   "64": "vite.config.ts",
   "65": "desktop",
-  "66": "github.com/rss/go-server"
+  "66": "github.com/rss/go-server",
+  "67": "main",
+  "68": "App",
+  "69": "ReadabilityResult",
+  "70": "PROJECT.md — RSS Reader 产品意图",
+  "71": "AI 自定义指令",
+  "72": "RunMigrations",
+  "73": "newCacheTestService",
+  "74": ".toggleReadLater",
+  "75": ".toggleStar",
+  "76": "saveUploadToTempFile",
+  "77": "TestCoordinatorNewItemsAccumulate",
+  "78": "systray.go"
 }

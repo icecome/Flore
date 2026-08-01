@@ -1,7 +1,5 @@
-import { ofetch } from 'ofetch';
 import type { FetcherDefinition } from '../registry.js';
-import { BaseFetcher, type ScrapeResult } from '../base-fetcher.js';
-import * as cheerio from 'cheerio';
+import { BaseFetcher, type ScrapeResult, cheerio } from '../base-fetcher.js';
 
 /**
  * 通用 RSS/Atom 订阅源抓取器

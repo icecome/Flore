@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Go dependencies
+        run: cd server/go && go mod download
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Go vet
+        run: cd server/go && go vet ./...
+
+      - name: Go test
+        run: cd server/go && go test -cover ./...
+
+      - name: TypeScript check
+        run: cd apps/web && npx tsc --noEmit
+
+      - name: Build Go backend
+        run: cd server/go && go build ./...
+
+      - name: Build frontend
+        run: npm run build:web
