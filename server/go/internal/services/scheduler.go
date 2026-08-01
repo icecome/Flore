@@ -1,0 +1,250 @@
+package services
+
+import (
+	"log/slog"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/rss/go-server/internal/models"
+)
+
+// Scheduler 最小后台调度器：按订阅源 interval 周期性向 Coordinator 提交抓取任务。
+//
+// 职责极简：到点查询需抓取的源，调用 coordinator.SubmitAll。
+// 不再做并发控制、不去重、不加 atomic 标志——这些都由 Coordinator 统一负责。
+type Scheduler struct {
+	service  *ReaderService
+	interval time.Duration
+	ticker   *time.Ticker
+	stop     chan struct{}
+	wg       sync.WaitGroup
+	running  bool
+	mu       sync.Mutex
+
+	lastBackupAt    time.Time // 上次自动备份时间
+	lastRetentionAt time.Time // 上次文章清理时间
+}
+
+// NewScheduler 创建调度器。checkInterval 指定检查周期，默认 5 分钟。
+func NewScheduler(service *ReaderService, checkInterval time.Duration) *Scheduler {
+	if checkInterval <= 0 {
+		checkInterval = 5 * time.Minute
+	}
+	sch := &Scheduler{
+		service:  service,
+		interval: checkInterval,
+		stop:     make(chan struct{}),
+	}
+	sch.loadPersistedScheduleState()
+	return sch
+}
+
+// loadPersistedScheduleState 从 Setting 表恢复上次执行时间，
+// 避免进程重启后立刻重复触发备份/清理（M-R3 根因：调度状态不应是临时变量）
+func (sch *Scheduler) loadPersistedScheduleState() {
+	if t := sch.service.GetSettingInt("lastBackupAtUnix", 0); t > 0 {
+		sch.lastBackupAt = time.Unix(int64(t), 0)
+	}
+	if t := sch.service.GetSettingInt("lastRetentionAtUnix", 0); t > 0 {
+		sch.lastRetentionAt = time.Unix(int64(t), 0)
+	}
+}
+
+func (sch *Scheduler) persistLastBackupAt(t time.Time) {
+	if err := sch.service.UpdateSettings(map[string]string{
+		"lastBackupAtUnix": strconv.FormatInt(t.Unix(), 10),
+	}); err != nil {
+		slog.Warn("scheduler: failed to persist lastBackupAt", "error", err)
+	}
+}
+
+func (sch *Scheduler) persistLastRetentionAt(t time.Time) {
+	if err := sch.service.UpdateSettings(map[string]string{
+		"lastRetentionAtUnix": strconv.FormatInt(t.Unix(), 10),
+	}); err != nil {
+		slog.Warn("scheduler: failed to persist lastRetentionAt", "error", err)
+	}
+}
+
+// Start 启动调度器。启动后立即触发首轮抓取（去重保护下与周期抓取并发无害），
+// 之后按 checkInterval 周期触发。
+func (sch *Scheduler) Start() {
+	sch.mu.Lock()
+	defer sch.mu.Unlock()
+	if sch.running {
+		return
+	}
+	sch.running = true
+	sch.ticker = time.NewTicker(sch.interval)
+
+	// 首轮立即执行
+	sch.wg.Add(1)
+	go func() {
+		defer sch.wg.Done()
+		select {
+		case <-sch.stop:
+			return
+		default:
+			sch.runOnce()
+		}
+	}()
+
+	// 周期性调度
+	sch.wg.Add(1)
+	go func() {
+		defer sch.wg.Done()
+		for {
+			select {
+			case <-sch.ticker.C:
+				sch.runOnce()
+			case <-sch.stop:
+				return
+			}
+		}
+	}()
+}
+
+// Stop 停止调度器并等待当前轮次完成。
+func (sch *Scheduler) Stop() {
+	sch.mu.Lock()
+	if !sch.running {
+		sch.mu.Unlock()
+		return
+	}
+	sch.running = false
+	if sch.ticker != nil {
+		sch.ticker.Stop()
+	}
+	close(sch.stop)
+	sch.mu.Unlock()
+	sch.wg.Wait()
+}
+
+// runOnce 执行一轮调度：筛选到期的源提交给 Coordinator，并触发备份与文章清理。
+// 不再做并发控制——Coordinator 自带去重与 worker 池。
+func (sch *Scheduler) runOnce() {
+	sources, err := sch.service.GetSources()
+	if err != nil {
+		slog.Error("scheduler: failed to get sources", "error", err)
+		return
+	}
+
+	toFetch := filterSourcesToFetch(sources)
+	if len(toFetch) > 0 && sch.service.Coordinator() != nil {
+		n := sch.service.Coordinator().SubmitAll(toFetch)
+		slog.Info("scheduler: submitted fetch tasks", "total", len(toFetch), "queued", n)
+	}
+
+	// 备份与文章清理（与抓取独立，互不阻塞）
+	sch.wg.Add(1)
+	go func() {
+		defer sch.wg.Done()
+		sch.maybeRunBackup()
+		sch.maybeRunRetention()
+	}()
+}
+
+// maybeRunBackup 根据设置决定是否触发自动备份
+func (sch *Scheduler) maybeRunBackup() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("scheduler: panic during backup", "panic", r)
+		}
+	}()
+
+	if !sch.service.GetSettingBool("backupAutoEnabled", false) {
+		return
+	}
+
+	intervalMin := sch.service.GetSettingInt("backupAutoInterval", 1440)
+	if intervalMin <= 0 {
+		return
+	}
+
+	now := time.Now()
+	sch.mu.Lock()
+	lastBackup := sch.lastBackupAt
+	sch.mu.Unlock()
+	if !lastBackup.IsZero() && now.Sub(lastBackup) < time.Duration(intervalMin)*time.Minute {
+		return
+	}
+
+	name, err := sch.service.CreateCompressedBackup()
+	if err != nil {
+		slog.Warn("scheduler: auto backup failed", "error", err)
+		return
+	}
+	sch.mu.Lock()
+	sch.lastBackupAt = now
+	sch.mu.Unlock()
+	sch.persistLastBackupAt(now)
+	slog.Debug("scheduler: auto backup created", "name", name)
+
+	// 自动整理压缩：备份完成后对实时库做一次 VACUUM，回收删除产生的空闲空间（M-P1）
+	if err := sch.service.Vacuum(); err != nil {
+		slog.Warn("scheduler: auto vacuum failed", "error", err)
+	}
+}
+
+// maybeRunRetention 根据设置决定是否触发文章清理
+func (sch *Scheduler) maybeRunRetention() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("scheduler: panic during retention cleanup", "panic", r)
+		}
+	}()
+
+	now := time.Now()
+	sch.mu.Lock()
+	lastRetention := sch.lastRetentionAt
+	sch.mu.Unlock()
+	if !lastRetention.IsZero() && now.Sub(lastRetention) < 24*time.Hour {
+		return
+	}
+
+	retentionDays := sch.service.GetSettingInt("articleRetentionDays", 0)
+	retentionMax := sch.service.GetSettingInt("articleRetentionMax", 0)
+	if retentionDays <= 0 && retentionMax <= 0 {
+		return
+	}
+
+	excludeStarred := sch.service.GetSettingBool("retentionExcludeStarred", true)
+	excludeReadLater := sch.service.GetSettingBool("retentionExcludeReadLater", true)
+
+	deleted, err := sch.service.CleanupArticles(retentionDays, retentionMax, excludeStarred, excludeReadLater)
+	if err != nil {
+		slog.Warn("scheduler: article retention cleanup failed", "error", err)
+		return
+	}
+	sch.mu.Lock()
+	sch.lastRetentionAt = now
+	sch.mu.Unlock()
+	sch.persistLastRetentionAt(now)
+	if deleted > 0 {
+		slog.Debug("scheduler: retention cleanup done", "deleted", deleted)
+		// 清理后回收空间，避免实时库体积虚高（M-P1）
+		if err := sch.service.Vacuum(); err != nil {
+			slog.Warn("scheduler: auto vacuum after retention failed", "error", err)
+		}
+	}
+}
+
+// filterSourcesToFetch 筛选需要抓取的源
+func filterSourcesToFetch(sources []models.Source) []int {
+	now := time.Now()
+	var toFetch []int
+	for _, src := range sources {
+		if !src.Active || src.Interval <= 0 {
+			continue
+		}
+		if src.LastSuccessAt.T == nil {
+			toFetch = append(toFetch, src.ID)
+			continue
+		}
+		if now.Sub(*src.LastSuccessAt.T) >= time.Duration(src.Interval)*time.Minute {
+			toFetch = append(toFetch, src.ID)
+		}
+	}
+	return toFetch
+}

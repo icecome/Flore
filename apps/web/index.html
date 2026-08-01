@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="description" content="本地优先的 RSS 阅读器" />
+    <!--
+      CSP 策略：
+      - script-src: 'self' + nonce-theme-init + https（网页模式 iframe srcdoc 加载原文 JS 需要）
+      - style-src: 'self' 'unsafe-inline' https（原文外部样式表需要）
+      - img-src: self/data/https + 本地后端（127.0.0.1 / localhost 任意端口）
+      - font-src: self/https/data（原文自定义字体需要）
+      - connect-src: 本地后端 + https（网页模式中原文 JS 发起的请求需要）
+      - frame-src: self/https + 本地后端，用于「网页模式」iframe 加载后端代理 URL
+      说明：srcdoc 文档会继承父页面 CSP，因此需要在此放行外部 https 资源。
+      iframe sandbox 未设置 allow-same-origin，原文 JS 无法访问父窗口，风险可控。
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'nonce-theme-init' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' http://127.0.0.1:* http://localhost:* data: https:; font-src 'self' https: data:; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; frame-src 'self' http://127.0.0.1:* http://localhost:* https:;" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon-16x16.png" sizes="16x16" type="image/png" />
+    <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>Flore</title>
+    <script nonce="theme-init">
+      (function () {
+        const saved = localStorage.getItem('theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (saved === 'dark' || (!saved && prefersDark)) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

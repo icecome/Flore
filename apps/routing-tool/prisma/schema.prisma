@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Folder {
+  id        Int      @id @default(autoincrement())
+  name      String   // 文件夹/分类名称
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sources   Source[]
+}
+
+model Source {
+  id          Int      @id @default(autoincrement())
+  name        String   // 订阅源名称
+  url         String   // 目标网站 URL
+  folderId    Int?     // 所属文件夹 ID
+  routeId     String?  // 使用的抓取路由 ID（如 chinawriter），为空时使用旧版 CSS 选择器模式
+  routeParams String?  // 路由参数，JSON 格式，如 {"category":"news"}
+  listRule    String   // 列表页 CSS 选择器（旧版，routeId 为空时使用）
+  titleRule   String?  // 标题提取规则（旧版）
+  linkRule    String?  // 链接提取规则（旧版）
+  descRule    String?  // 摘要提取规则（旧版）
+  dateRule    String?  // 日期提取规则（旧版）
+  authorRule  String?  // 作者提取规则（旧版）
+  interval       Int      @default(120)  // 抓取间隔（分钟）
+  active         Boolean  @default(true)
+  isPrivate      Boolean  @default(false)  // 私密订阅，不在个人资料页面显示
+  hideInTimeline Boolean  @default(false)  // 在时间线上隐藏
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  items          Item[]
+  folder         Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([folderId])
+}
+
+model Item {
+  id          Int       @id @default(autoincrement())
+  sourceId    Int
+  title       String
+  link        String    @unique
+  desc        String?
+  author      String?
+  pubDate     DateTime?
+  isRead      Boolean   @default(false)  // 是否已读
+  isStarred   Boolean   @default(false)  // 是否收藏
+  isReadLater Boolean   @default(false)  // 是否稍后阅读
+  createdAt   DateTime  @default(now())
+
+  source Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId])
+  @@index([link])
+  @@index([isRead])
+  @@index([isStarred])
+  @@index([isReadLater])
+}
+
+model FilterRule {
+  id          Int      @id @default(autoincrement())
+  name        String   // 规则名称
+  enabled     Boolean  @default(true)  // 是否启用
+  priority    Int      @default(0)     // 优先级，数字越大越先执行
+  scope       String   @default("global") // global | source | folder
+  sourceId    Int?     // scope=source 时生效
+  folderId    Int?     // scope=folder 时生效
+  conditions  String   // JSON 条件数组
+  action      String   // markRead | star | readLater
+  createdAt   DateTime @default(now())
+
+  @@index([enabled])
+  @@index([priority])
+}
+
+model Config {
+  id              Int   @id @default(autoincrement())
+  defaultInterval Int   @default(120) // 全局默认抓取间隔（分钟）
+}

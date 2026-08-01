@@ -1,0 +1,37 @@
+{
+  "name": "rss-routing-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "build:bundle": "esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/bundle.cjs --format=cjs",
+    "start": "node dist/index.js",
+    "start:bundle": "node dist/bundle.cjs",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "hono": "^4.6.0",
+    "node-cron": "^3.0.3",
+    "ofetch": "^1.4.0",
+    "rss": "^1.2.2"
+  },
+  "devDependencies": {
+    "@prisma/client": "^6.0.0",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/rss": "^0.0.32",
+    "@yao-pkg/pkg": "^6.21.0",
+    "esbuild": "^0.28.1",
+    "nexe": "^5.0.0-beta.4",
+    "prisma": "^6.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

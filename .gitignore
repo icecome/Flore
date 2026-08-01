@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+*.exe
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.history/
+.vscode/
+.idea/
+.workbuddy/
+
+# Wails build artifacts (desktop)
+apps/desktop/frontend/dist/
+apps/desktop/build/bin/
+
+# Generated design previews
+.design/
