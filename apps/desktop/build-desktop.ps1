@@ -9,8 +9,8 @@ $projectRoot = Join-Path (Join-Path $desktopDir '..') '..'
 $binDir = Join-Path (Join-Path $desktopDir 'build') 'bin'
 $goExe = Join-Path $binDir 'flore-backend.exe'
 
-# 0. 读取版本号（从根 package.json 获取）
-$pkgJson = Get-Content (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json
+# 0. 读取版本号（从根 package.json 获取，使用 UTF-8 编码避免中文乱码）
+$pkgJson = Get-Content (Join-Path $projectRoot 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $appVersion = $pkgJson.version
 Write-Host "Building version: $appVersion"
 
