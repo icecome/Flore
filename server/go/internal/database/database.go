@@ -100,6 +100,11 @@ func Init() error {
 	return nil
 }
 
+// SetDBPath 在测试中设置数据库路径
+func SetDBPath(path string) {
+	resolvedDBPath = path
+}
+
 // resolveDatabasePath 按优先级解析数据库路径：环境变量 > 开发模式 > 便携模式 > 默认路径
 func resolveDatabasePath() (string, error) {
 	dbPath := os.Getenv("DATABASE_URL")

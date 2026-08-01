@@ -6,24 +6,42 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/rss/go-server/internal/database"
 	"github.com/rss/go-server/internal/models"
 )
 
 func newTestService(t *testing.T) *ReaderService {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	// 使用临时文件作为数据库路径
+	tmpDB, err := os.CreateTemp("", "flore-test-*.db")
 	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
+		t.Fatalf("create temp db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Source{}, &models.Item{}, &models.Folder{}, &models.Setting{}); err != nil {
+	tmpDB.Close()
+	database.SetDBPath(tmpDB.Name())
+
+	db, err := gorm.Open(sqlite.Open(tmpDB.Name()), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&models.Source{},
+		&models.Item{},
+		&models.Folder{},
+		&models.Setting{},
+		&models.FilterRule{},
+	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return &ReaderService{db: db}
 }
+
+func ptrTime(t time.Time) *time.Time { return &t }
 
 // TestBackupRestore_CorruptedFile 验证损坏的备份文件不会破坏原数据库
 func TestBackupRestore_CorruptedFile(t *testing.T) {
@@ -33,17 +51,17 @@ func TestBackupRestore_CorruptedFile(t *testing.T) {
 	s.db.Create(&models.Source{Name: "Test", URL: "https://example.com/rss"})
 	s.db.Create(&models.Item{SourceID: 1, Title: "Article 1", Link: "https://example.com/1"})
 
-	// 创建损坏的备份文件
-	tmpDir := t.TempDir()
-	corruptPath := filepath.Join(tmpDir, "corrupt.zip")
-	f, _ := os.Create(corruptPath)
-	f.WriteString("not a valid zip")
-	f.Close()
-
-	// 尝试从损坏文件恢复
+	// 尝试从损坏数据恢复
 	err := s.ImportDatabase(bytes.NewReader([]byte("not a valid sqlite file")))
 	if err == nil {
 		t.Fatal("expected error for corrupted backup")
+	}
+
+	// 验证原数据仍然存在
+	var count int64
+	s.db.Model(&models.Item{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 item after failed restore, got %d", count)
 	}
 }
 
@@ -64,10 +82,15 @@ func TestBackupRestore_ValidBackup(t *testing.T) {
 		t.Fatal("expected non-empty backup name")
 	}
 
-	// 验证备份存在
-	if _, err := os.Stat(backupName); os.IsNotExist(err) {
+	// 验证备份文件存在
+	backupDir := filepath.Dir(database.DBPath())
+	backupPath := filepath.Join(backupDir, "backups", backupName)
+	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
 		t.Fatal("backup file not found")
 	}
+
+	// 清理备份
+	os.Remove(backupPath)
 }
 
 // TestOPMLImport 验证 OPML 导入流程
@@ -84,7 +107,14 @@ func TestOPMLImport(t *testing.T) {
 
 	// OPML 导入应该能够成功
 	if err := s.ImportOPML(opmlContent); err != nil {
-		t.Logf("OPML import error (expected for empty DB): %v", err)
+		t.Fatalf("OPML import failed: %v", err)
+	}
+
+	// 验证源已创建
+	var count int64
+	s.db.Model(&models.Source{}).Count(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 source, got %d", count)
 	}
 }
 
@@ -109,9 +139,9 @@ func TestUpsertFeedItems(t *testing.T) {
 		t.Fatalf("upsert failed: %v", err)
 	}
 
-	// 验证文章已插入
+	// 验证文章已插入（使用正确的列名 sourceId）
 	var count int64
-	s.db.Model(&models.Item{}).Where("source_id = ?", source.ID).Count(&count)
+	s.db.Model(&models.Item{}).Where("sourceId = ?", source.ID).Count(&count)
 	if count != 2 {
 		t.Fatalf("expected 2 items, got %d", count)
 	}
@@ -121,32 +151,44 @@ func TestUpsertFeedItems(t *testing.T) {
 func TestRetentionPolicy(t *testing.T) {
 	s := newTestService(t)
 
-	// 创建多个源和文章
+	now := time.Now()
+	// 创建5个源，每个源10篇文章（不同日期）
 	for i := 1; i <= 5; i++ {
 		var source models.Source
-		s.db.Create(&models.Source{Name: "Source", URL: "https://example.com/rss", Active: true})
+		s.db.Create(&models.Source{Name: "Source", URL: "https://example.com/rss/" + string(rune('a'+i)), Active: true})
 		s.db.First(&source)
 
 		for j := 1; j <= 10; j++ {
+			pubDate := now.AddDate(0, 0, -j)
+			link := "https://example.com/article/" + string(rune('a'+i)) + "/" + string(rune('0'+j))
 			s.db.Create(&models.Item{
 				SourceID: source.ID,
 				Title:    "Article",
-				Link:     "https://example.com/article",
-				PubDate:  models.NullableMilliTime{Time: source.CreatedAtTime.Time().AddDate(0, 0, -j)},
+				Link:     link,
+				PubDate:  models.NullableMilliTime{T: ptrTime(pubDate)},
 			})
 		}
 	}
 
-	// 设置保留策略
+	// 设置保留策略为7天
 	s.db.Model(&models.Setting{}).Where("key = ?", "keepDays").
 		Assign(&models.Setting{Key: "keepDays", Value: "7"}).
 		FirstOrCreate(&models.Setting{Key: "keepDays"})
 
 	// 执行清理
-	_, err := s.CleanupArticles(7, 0, false, false)
+	deleted, err := s.CleanupArticles(7, 0, false, false)
 	if err != nil {
 		t.Fatalf("cleanup failed: %v", err)
 	}
+
+	// 验证清理了超出7天的文章（每个源应该有3篇被清理）
+	var count int64
+	s.db.Model(&models.Item{}).Count(&count)
+	expectedMax := int64(50) // 5源 x 10篇
+	if count > expectedMax {
+		t.Fatalf("expected at most %d items, got %d", expectedMax, count)
+	}
+	t.Logf("cleanup deleted %d items, remaining %d", deleted, count)
 }
 
 // TestBackupZipFormat 验证备份 ZIP 格式正确
@@ -160,7 +202,9 @@ func TestBackupZipFormat(t *testing.T) {
 	}
 
 	// 验证是有效的 ZIP 文件
-	f, err := zip.OpenReader(backupName)
+	backupDir := filepath.Dir(database.DBPath())
+	backupPath := filepath.Join(backupDir, "backups", backupName)
+	f, err := zip.OpenReader(backupPath)
 	if err != nil {
 		t.Fatalf("backup is not a valid zip: %v", err)
 	}
@@ -177,4 +221,7 @@ func TestBackupZipFormat(t *testing.T) {
 	if !found {
 		t.Fatal("backup zip does not contain a .db file")
 	}
+
+	// 清理
+	os.Remove(backupPath)
 }

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -145,11 +146,14 @@ func sanitizeURL(s string) string {
 }
 
 func sanitizeError(s string) string {
-	replaced := sanitizeURL(s)
-	if replaced != s {
-		return replaced
-	}
-	return strings.ReplaceAll(s, "\"", "")
+	// 使用正则替换所有 URL 路径部分
+	re := regexp.MustCompile(`https?://[^/\s?]+(?:/[^\s]*)?`)
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		if u, err := url.Parse(match); err == nil {
+			return u.Scheme + "://" + u.Host
+		}
+		return match
+	})
 }
 
 // NewDesensitizeHandler 创建带脱敏的 slog.Handler
@@ -166,7 +170,16 @@ func (h *desensitizeHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *desensitizeHandler) Handle(_ context.Context, r slog.Record) error {
-	return h.next.Handle(nil, r)
+	// 脱敏记录中的属性：创建新 Record 并替换属性
+	newR := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	var desensitizedAttrs []slog.Attr
+	r.Attrs(func(a slog.Attr) bool {
+		a.Value = DesensitizeAttr(a.Key, a.Value)
+		desensitizedAttrs = append(desensitizedAttrs, a)
+		return true
+	})
+	newR.AddAttrs(desensitizedAttrs...)
+	return h.next.Handle(nil, newR)
 }
 
 func (h *desensitizeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -179,7 +192,7 @@ func (h *desensitizeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 }
 
 func (h *desensitizeHandler) WithGroup(name string) slog.Handler {
-	return &desensitizeHandler{next: h.next.WithGroup(name)}
+	return h
 }
 
 // ReplaceAttr 是 slog.HandlerOptions.ReplaceAttr 的实现
