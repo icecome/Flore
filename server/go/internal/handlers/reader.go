@@ -29,6 +29,7 @@ var (
 	linkRePre    = regexp.MustCompile(`(?is)<link\s[^>]*rel\s*=\s*["']?stylesheet["']?[^>]*>`)
 	hrefRePre    = regexp.MustCompile(`href\s*=\s*["']([^"']+)["']`)
 	cspMetaRePre = regexp.MustCompile(`(?is)<meta\s[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>`)
+	urlRePre     = regexp.MustCompile(`url\(\s*["']?([^"'\s\)]+)["']?\s*\)`)
 )
 
 // rateLimiter 简单的基于 IP 的速率限制中间件
@@ -1400,7 +1401,7 @@ func rewriteCSSUrls(cssContent string, cssURL string, referer string, imageProxy
 		return cssContent
 	}
 
-	urlRe := regexp.MustCompile(`url\(\s*["']?([^"'\s\)]+)["']?\s*\)`)
+	urlRe := urlRePre
 	return urlRe.ReplaceAllStringFunc(cssContent, func(match string) string {
 		submatch := urlRe.FindStringSubmatch(match)
 		if len(submatch) < 2 {
@@ -1588,7 +1589,7 @@ func rewriteCSSUrlsInContent(cssContent string, cssURL string, referer string, i
 		return cssContent
 	}
 
-	urlRe := regexp.MustCompile(`url\(\s*["']?([^"'\s\)]+)["']?\s*\)`)
+	urlRe := urlRePre
 	return urlRe.ReplaceAllStringFunc(cssContent, func(match string) string {
 		submatch := urlRe.FindStringSubmatch(match)
 		if len(submatch) < 2 {
@@ -1709,7 +1710,7 @@ func rewriteImageURLs(htmlContent string, originalURL string, proxyBase string) 
 			return match
 		}
 		css := content[1]
-		urlRe := regexp.MustCompile(`url\(\s*["']?([^"'\s\)]+)["']?\s*\)`)
+		urlRe := urlRePre
 		rewritten := urlRe.ReplaceAllStringFunc(css, func(u string) string {
 			urlMatch := urlRe.FindStringSubmatch(u)
 			if len(urlMatch) < 2 {
@@ -1732,7 +1733,7 @@ func rewriteImageURLs(htmlContent string, originalURL string, proxyBase string) 
 			return match
 		}
 		styleVal := styleMatch[1]
-		urlRe := regexp.MustCompile(`url\(\s*["']?([^"'\s\)]+)["']?\s*\)`)
+		urlRe := urlRePre
 		rewritten := urlRe.ReplaceAllStringFunc(styleVal, func(u string) string {
 			urlMatch := urlRe.FindStringSubmatch(u)
 			if len(urlMatch) < 2 {

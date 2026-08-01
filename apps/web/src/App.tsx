@@ -890,6 +890,8 @@ function App() {
           onEditSource={(source) => setEditSource(source)}
           onRemoveFromFolder={handleRemoveFromFolder}
           readLaterCount={readLaterCount}
+          totalCount={totalCount}
+          unreadCountInScope={unreadCountInScope}
           searchKeyword={searchKeyword}
           isSearchMode={isSearchMode}
           onSearch={handleSearch}

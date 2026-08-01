@@ -171,39 +171,31 @@ func (a *App) startBackends() {
 }
 
 // stopBackends 停止已启动的后端进程。
-// 优先尝试优雅关闭（SIGTERM），超时后再强杀，避免数据写入被截断。
+// 优先 POST /api/shutdown 触发后端优雅关闭，超时后再 Kill。
 func (a *App) stopBackends() {
 	a.backendMutex.Lock()
 	cmd := a.goCmd
+	port := a.goPort
+	started := a.goStarted
 	a.backendMutex.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
 
-	// Windows 不支持 SIGTERM 优雅关闭信号，直接 Kill 并等待退出
-	if runtime.GOOS == "windows" {
-		if err := cmd.Process.Kill(); err != nil {
-			a.logger.Printf("[go-backend] failed to kill process: %v", err)
-		}
-		_ = cmd.Wait()
-		return
+	// 先尝试 POST /api/shutdown 触发后端自身优雅关闭（含 WAL checkpoint 与连接释放）
+	if started {
+		a.requestGracefulShutdown(port)
 	}
 
-	// Unix：优先尝试优雅关闭：发送 SIGTERM
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		a.logger.Printf("[go-backend] failed to send SIGTERM: %v", err)
-	}
-
-	// 等待进程退出，最多 3 秒
+	// 等待进程退出，最多 2.5 秒
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case <-done:
 		a.logger.Printf("[go-backend] process exited gracefully")
 		return
-	case <-time.After(3 * time.Second):
-		// 超时后强杀
+	case <-time.After(2500 * time.Millisecond):
 		if err := cmd.Process.Kill(); err != nil {
 			a.logger.Printf("[go-backend] failed to kill process: %v", err)
 		} else {
@@ -211,6 +203,18 @@ func (a *App) stopBackends() {
 		}
 		<-done
 	}
+}
+
+// requestGracefulShutdown 向后端发送优雅关闭请求（fire-and-forget）。
+func (a *App) requestGracefulShutdown(port int) {
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/shutdown", port)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post(url, "application/json", nil)
+	if err != nil {
+		a.logger.Printf("[go-backend] graceful shutdown request failed: %v", err)
+		return
+	}
+	resp.Body.Close()
 }
 
 // startProcess 启动一个子进程并返回 exec.Cmd。

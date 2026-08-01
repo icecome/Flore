@@ -142,52 +142,6 @@ func (s *ReaderService) extractDBFromBackup(name string) (string, error) {
 	return tmpPath, nil
 }
 
-// restoreFromFile 用临时数据库文件替换当前数据库（导入 / 恢复备份共用核心流程）
-func (s *ReaderService) restoreFromFile(tmpPath string) error {
-	s.dbMu.Lock()
-	defer s.dbMu.Unlock()
-
-	currentPath := database.DBPath()
-
-	// WAL 模式下先 checkpoint，将 -wal 中已提交的数据合并回主库，
-	// 否则 backupCurrentDatabase 拷贝的快照会丢失未合并的数据（启用 WAL 后的必要安全步骤）
-	if err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
-		slog.Warn("wal checkpoint before backup failed", "error", err)
-	}
-
-	if err := validateSQLite(tmpPath); err != nil {
-		return err
-	}
-	bakPath, err := s.backupCurrentDatabase(currentPath)
-	if err != nil {
-		return err
-	}
-	if err := s.replaceDatabaseFile(tmpPath, currentPath, bakPath); err != nil {
-		// replaceDatabaseFile 内部已尝试回滚并恢复，需同步 s.db 引用
-		// 已持有 dbMu 写锁，直接赋值避免 setDb 死锁
-		s.db = database.GetDB()
-		return err
-	}
-	if err := database.Init(); err != nil {
-		s.db = database.GetDB()
-		return fmt.Errorf("failed to reinitialize database: %w", err)
-	}
-	if err := database.AutoMigrate(); err != nil {
-		// schema 迁移失败属于严重问题，需返回错误让调用方感知，避免数据结构不一致
-		s.db = database.GetDB()
-		return fmt.Errorf("failed to automigrate after restore: %w", err)
-	}
-	// 先重新指向重新打开的连接，再做压缩，避免使用已被关闭的旧连接（M-P1）
-	s.db = database.GetDB()
-	// 导入 / 恢复后压缩一次，避免恢复的大库长期占用空间
-	if err := s.db.Exec("VACUUM").Error; err != nil {
-		slog.Warn("vacuum after restore failed", "error", err)
-	}
-	// 导入/恢复后使未读计数缓存失效，下次 GetSources 重算为导入后的真实值（P2-1/B）
-	s.invalidateUnreadCount()
-	return nil
-}
-
 // saveUploadToTempFile 保存上传文件到临时路径（限制 256MB）
 func saveUploadToTempFile(reader io.Reader) (string, error) {
 	tmpFile, err := os.CreateTemp("", "rss-restore-*.db")
@@ -203,50 +157,6 @@ func saveUploadToTempFile(reader io.Reader) (string, error) {
 	}
 	tmpFile.Close()
 	return tmpPath, nil
-}
-
-// backupCurrentDatabase 备份当前数据库并清理过期备份
-func (s *ReaderService) backupCurrentDatabase(currentPath string) (string, error) {
-	timestamp := time.Now().Format("20060102-150405")
-	bakPath := fmt.Sprintf("%s.bak.%s", currentPath, timestamp)
-	if err := copyFile(currentPath, bakPath); err != nil {
-		return "", fmt.Errorf("failed to backup current database: %w", err)
-	}
-	// 复用备份保留策略阈值，避免与 zip 备份的清理逻辑分裂（n-01）
-	maxKeep := s.GetSettingInt("backupMaxKeep", 10)
-	cleanupOldBackups(currentPath, maxKeep)
-	return bakPath, nil
-}
-
-// replaceDatabaseFile 关闭当前连接、替换文件、失败时回滚
-func (s *ReaderService) replaceDatabaseFile(tmpPath, currentPath, bakPath string) error {
-	sqlDB, err := database.GetDB().DB()
-	if err != nil {
-		return fmt.Errorf("failed to get underlying sql db: %w", err)
-	}
-	sqlDB.SetMaxOpenConns(0)
-	if err := sqlDB.Close(); err != nil {
-		return fmt.Errorf("failed to close current database: %w", err)
-	}
-
-	// 删除可能残留的 WAL 文件，避免旧库的 -wal/-shm 被误关联到新库（启用 WAL 后尤其重要）
-	for _, suffix := range []string{"-wal", "-shm"} {
-		_ = os.Remove(currentPath + suffix)
-	}
-
-	if err := copyFile(tmpPath, currentPath); err != nil {
-		_ = os.Remove(currentPath)
-		if copyErr := copyFile(bakPath, currentPath); copyErr != nil {
-			// 回滚拷贝失败属于灾难性场景：原库已不可用，记录并继续尝试 Init
-			slog.Error("failed to restore backup after copy failure", "error", copyErr)
-		}
-		if initErr := database.Init(); initErr != nil {
-			slog.Error("failed to reinit database after rollback", "error", initErr)
-			return fmt.Errorf("failed to replace database file: %w (rollback reinit also failed: %v)", err, initErr)
-		}
-		return fmt.Errorf("failed to replace database file: %w", err)
-	}
-	return nil
 }
 
 // copyFile 复制文件

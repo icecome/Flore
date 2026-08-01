@@ -8,6 +8,12 @@ build/
 *.tsbuildinfo
 *.exe
 
+# Go binary directory
+server/go/bin/
+
+# Graphify analysis output
+graphify-out/
+
 # Database
 *.db
 *.db-journal
@@ -34,6 +40,7 @@ npm-debug.log*
 .vscode/
 .idea/
 .workbuddy/
+.trae/
 
 # Wails build artifacts (desktop)
 apps/desktop/frontend/dist/

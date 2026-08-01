@@ -53,6 +53,8 @@ interface Props {
   onEditSource: (source: Source) => void;
   onRemoveFromFolder: (sourceId: number) => void;
   readLaterCount?: number;
+  totalCount?: number; // 全文总数（用于"全部文章"计数）
+  unreadCountInScope?: number; // 当前范围未读数（用于"未读文章"计数）
   searchKeyword?: string;
   isSearchMode?: boolean;
   onSearch?: (keyword: string) => void;
@@ -134,7 +136,10 @@ export default function Sidebar({
   isSearchMode = false,
   onSearch,
   onClearSearch,
+  totalCount = 0,
+  unreadCountInScope = 0,
 }: Props) {
+  // totalUnread 由 sources 计算（用于未传入 prop 时的降级）
   const totalUnread = useMemo(
     () => sources.reduce((sum, source) => sum + (source.unreadCount || 0), 0),
     [sources]
@@ -321,7 +326,7 @@ export default function Sidebar({
         <FilterRow
           icon={<Inbox size={16} />}
           label="全部文章"
-          count={totalUnread}
+          count={totalCount}
           active={isFilterActive('all')}
           onClick={() => {
             onSelectFilter('all');
@@ -332,7 +337,7 @@ export default function Sidebar({
         <FilterRow
           icon={<AlertTriangle size={16} />}
           label="未读文章"
-          count={totalUnread}
+          count={unreadCountInScope}
           countTone="muted"
           active={isFilterActive('unread')}
           onClick={() => {

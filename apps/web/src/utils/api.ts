@@ -162,13 +162,28 @@ async function waitForDesktop(maxWaitMs: number): Promise<boolean> {
   return isDesktop();
 }
 
-/** 从 Wails 后端获取状态并设置 API 地址 */
+/** 从 Wails 后端获取状态并设置 API 地址，轮询等待后端就绪 */
 async function applyBackendStatus(): Promise<void> {
   const app = getWailsApp();
   if (!app?.GetBackendStatus) return;
   try {
     const status = await app.GetBackendStatus();
-    if (status.goBaseURL) setApiBase(status.goBaseURL);
+    // 轮询等待后端启动完成，避免设置为 http://127.0.0.1:0
+    const maxRetries = 20;
+    for (let i = 0; i < maxRetries; i++) {
+      if (status.goStarted && status.goBaseURL) {
+        setApiBase(status.goBaseURL);
+        return;
+      }
+      await sleep(200);
+      const retry = await app.GetBackendStatus();
+      if (retry.goStarted && retry.goBaseURL) {
+        setApiBase(retry.goBaseURL);
+        return;
+      }
+    }
+    // 超时仍未就绪，记录错误但不设置错误地址
+    console.warn('Backend not ready after polling, using default API base');
   } catch (err) {
     console.error('Failed to initialize desktop API base:', err);
   }
@@ -178,7 +193,8 @@ export async function initApiBase(maxWaitMs = 3000): Promise<void> {
   if (!isDesktop() && !maybeWailsEnv()) return;
   const ready = await waitForDesktop(maxWaitMs);
   if (!ready) return;
-  applyBackendStatus();
+  // 必须等待 API base 设置完成，否则首个请求可能拿到错误的默认地址
+  await applyBackendStatus();
 }
 
 /** 将 Blob 转换为 base64 字符串（分块处理避免大文件栈溢出） */
