@@ -37,6 +37,8 @@ jobs:
         if: matrix.goos == 'linux'
         run: |
           sudo apt-get update
+          # Ubuntu 24.04 使用 libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev 2>/dev/null ||
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libgoocanvas-2.0-dev
 
       - name: Install Go dependencies
@@ -50,8 +52,9 @@ jobs:
 
       - name: Go vet (desktop)
         run: |
-          # main.go 有 //go:embed all:frontend/dist，需先创建目录否则 embed 编译失败
+          # main.go 有 //go:embed all:frontend/dist，需先创建含占位文件的目录
           mkdir -p apps/desktop/frontend/dist
+          touch apps/desktop/frontend/dist/.gitkeep
           cd apps/desktop && go vet ./...
 
       - name: Install Wails CLI
