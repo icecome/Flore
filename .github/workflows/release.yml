@@ -73,6 +73,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev
+          # 创建 pkg-config 兼容 symlink，让需要 webkit2gtk-4.0 的构建也能找到 4.1
+          sudo ln -sf webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc 2>/dev/null || true
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -95,10 +97,8 @@ jobs:
           # 生成 version.go（替代 ldflags 注入，Wails 构建流程中 ldflags 不生效）
           node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"' + '$VERSION' + '\"\n')"
 
-          # 构建二进制（Linux 需 webkit2gtk_4_1 tag，Wails v2.13 支持）
-          TAGS=""
-          if [ "${{ matrix.goos }}" = "linux" ]; then TAGS="-tags webkit2gtk_4_1"; fi
-          wails build $TAGS
+          # 构建二进制
+          wails build
 
           # 生成 wails_tools.nsh（供 NSIS 安装器使用）
           mkdir -p build/windows/installer
