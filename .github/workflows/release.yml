@@ -94,10 +94,18 @@ jobs:
           VERSION="${VERSION#v}"
           cd apps/desktop
 
-          # 生成 version.go（替代 ldflags 注入，Wails 构建流程中 ldflags 不生效）
+          # 生成 version.go
           node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"' + '$VERSION' + '\"\n')"
 
-          # 构建二进制
+          # 构建后端二进制
+          BE_BIN="build/bin/florebackend"
+          if [ "${{ matrix.goos }}" = "windows" ]; then BE_BIN="build/bin/florebackend.exe"; fi
+          cd ../../server/go
+          mkdir -p $(dirname "../../apps/desktop/$BE_BIN")
+          go build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION" -o "../../apps/desktop/$BE_BIN" ./cmd/main.go
+          cd ../../apps/desktop
+
+          # 构建前端二进制
           wails build
 
           # 生成 wails_tools.nsh（供 NSIS 安装器使用）
