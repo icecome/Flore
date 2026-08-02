@@ -59,6 +59,7 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Build
+        shell: bash
         run: |
           cd apps/desktop
           node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"ci\"\n')"
