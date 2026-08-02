@@ -52,8 +52,8 @@ func (h *ReaderHandler) GenerateDiagnosticPackage(c *gin.Context) {
 		case "snapshot":
 			addDiagnosticItem(w, "db-snapshot.json", generateDBSnapshot(h.service))
 		case "logs":
-			addDiagnosticItem(w, "backend.log", readDesensitizedLog("flore-backend.log"))
-			addDiagnosticItem(w, "desktop.log", readDesensitizedLog("flore-desktop.log"))
+			addDiagnosticItem(w, "backend.log", readDesensitizedLog("florebackend.log"))
+			addDiagnosticItem(w, "desktop.log", readDesensitizedLog("floredesktop.log"))
 		case "stats":
 			addDiagnosticItem(w, "system-stats.json", generateSystemStats())
 		}
@@ -139,7 +139,7 @@ func generateDBSnapshot(svc *services.ReaderService) []byte {
 	snapshot["items"] = itemStats
 
 	// Recent errors from backend log
-	snapshot["recentErrors"] = readLastLines("flore-backend.log", 20)
+	snapshot["recentErrors"] = readLastLines("florebackend.log", 20)
 
 	return formatJSON(snapshot)
 }

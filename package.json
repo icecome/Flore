@@ -10,8 +10,8 @@
     "dev:router": "cd apps/routing-tool && npm run dev",
     "build:web": "cd apps/web && npm run build",
     "build:router": "cd apps/routing-tool && npm run build",
-    "build:go": "cd server\\go && go build -ldflags=\"-X github.com/rss/go-server/internal/handlers.appVersion=%npm_package_version%\" -o ..\\..\\apps\\desktop\\build\\bin\\flore-backend.exe .\\cmd\\main.go",
-    "build:desktop": "npm run build:go && cd apps/desktop && powershell -NoProfile -ExecutionPolicy Bypass -File build-desktop.ps1",
+    "build:go": "cd server/go && go build -ldflags=\"-X github.com/rss/go-server/internal/handlers.appVersion=${npm_package_version}\" -o ../../apps/desktop/build/bin/florebackend ./cmd/main.go",
+    "build:desktop": "cd apps/desktop && wails build -ldflags \"-X desktop.version=${npm_package_version}\" && go run ./cmd/package-tool -version ${npm_package_version}",
     "build": "npm run build:web && npm run build:go && npm run build:desktop",
     "wails:dev": "cd apps/desktop && wails dev",
     "wails:build": "npm run build:desktop"

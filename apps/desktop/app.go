@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"git.sr.ht/~jackmordaunt/go-toast/v2"
+	"desktop/internal/updater"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -32,6 +33,10 @@ const restartWaitPidEnv = "FLORE_RESTART_WAIT_PID"
 // backendPathEnv 允许开发态用绝对路径显式指定后端二进制，
 // 替代此前从 CWD 解析相对路径的不安全查找（M4）。
 const backendPathEnv = "FLORE_BACKEND_PATH"
+
+// version 由构建时通过 -ldflags "-X desktop.version=..." 注入（来源 package.json），
+// 桌面壳更新器据此与远端 manifest 比对判断是否需要更新。未注入时回退 "dev"。
+var version = "dev"
 
 // App struct
 type App struct {
@@ -55,6 +60,10 @@ type App struct {
 
 	// apiToken 注入后端 FLORE_API_TOKEN，桌面壳自身请求敏感接口时携带（M5）。
 	apiToken string
+
+	// updateMu 保护 cachedUpdate，避免并发检查/应用更新竞态。
+	updateMu     sync.Mutex
+	cachedUpdate *updater.UpdateInfo
 
 	// 窗口行为设置缓存。startup 时预置默认值，之后只由后台 goroutine 刷新；
 	// 窗口控制路径（含运行在主 UI 线程的 OnBeforeClose）只读缓存，
@@ -90,7 +99,7 @@ func newLogFile(dir string) *logFile {
 		dir = os.TempDir()
 	}
 	_ = os.MkdirAll(dir, 0755)
-	logPath := filepath.Join(dir, "flore-desktop.log")
+	logPath := filepath.Join(dir, "floredesktop.log")
 
 	f, err := newRotatingLogFile(logPath, logMaxSize, logMaxBackups)
 	if err != nil {
@@ -243,6 +252,76 @@ func (a *App) GetAPIToken() string {
 	return a.apiToken
 }
 
+// GetVersion 返回桌面壳版本号（构建时由 -ldflags 注入），供前端与更新器使用。
+func (a *App) GetVersion() string {
+	return version
+}
+
+// CheckForUpdate 检查远端是否有可用更新，结果缓存到 cachedUpdate 供 StartUpdate 使用。
+// 无更新返回 (nil, nil)；网络/解析失败返回 error。
+func (a *App) CheckForUpdate() (*updater.UpdateInfo, error) {
+	info, err := updater.CheckForUpdate(version)
+	if err != nil {
+		return nil, err
+	}
+	a.updateMu.Lock()
+	a.cachedUpdate = info
+	a.updateMu.Unlock()
+	return info, nil
+}
+
+// StartUpdate 应用已缓存的更新：准备替换文件并退出当前进程，
+// 由外部脚本在进程释放后完成文件覆盖并重启。
+func (a *App) StartUpdate() error {
+	a.updateMu.Lock()
+	info := a.cachedUpdate
+	a.updateMu.Unlock()
+	if info == nil {
+		return fmt.Errorf("当前没有可应用的更新")
+	}
+	a.writeUpdateMarker(info.LatestVersion)
+	if err := updater.ApplyUpdate(info); err != nil {
+		// 应用失败清理标记，避免下次启动误报已更新
+		a.removeUpdateMarker()
+		return err
+	}
+	// 强制退出（忽略 tray/quit 行为），让外部脚本接管文件替换
+	go func() {
+		a.forceQuit.Store(true)
+		if ctx := a.context(); ctx != nil {
+			wailsRuntime.Quit(ctx)
+		} else {
+			os.Exit(0)
+		}
+	}()
+	return nil
+}
+
+const updateMarkerName = "updated.flag"
+
+// writeUpdateMarker 写入"已更新"标记，供重启后的实例提示用户。
+func (a *App) writeUpdateMarker(newVersion string) {
+	dir := a.appDataDir()
+	_ = os.MkdirAll(dir, 0700)
+	_ = os.WriteFile(filepath.Join(dir, updateMarkerName), []byte(newVersion), 0600)
+}
+
+// removeUpdateMarker 删除"已更新"标记。
+func (a *App) removeUpdateMarker() {
+	_ = os.Remove(filepath.Join(a.appDataDir(), updateMarkerName))
+}
+
+// consumeUpdateMarker 读取并删除"已更新"标记，返回新版本号（无则空串）。
+func (a *App) consumeUpdateMarker() string {
+	path := filepath.Join(a.appDataDir(), updateMarkerName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	_ = os.Remove(path)
+	return strings.TrimSpace(string(data))
+}
+
 // context 原子读取 Wails 上下文，未就绪时返回 nil（M7）。
 func (a *App) context() context.Context {
 	if p := a.ctx.Load(); p != nil {
@@ -275,6 +354,11 @@ func (a *App) startup(ctx context.Context) {
 
 	// 异步启动本地后端服务，避免阻塞 UI（健康检查最长 15s）
 	go a.startBackends()
+
+	// 若刚完成自动更新，提示用户
+	if v := a.consumeUpdateMarker(); v != "" {
+		_ = a.ShowNotification("Flore 已更新", "已更新到 v"+v)
+	}
 
 	// 启动后台通知监听：检测抓取完成并发送原生系统通知，覆盖托盘/调度盲区（M-A3）
 	// 使用独立 cancel context，shutdown 时显式停止 goroutine 避免泄漏
@@ -322,7 +406,7 @@ func (a *App) startBackends() {
 	cmd := a.startProcess("go-backend", goExe, []string{}, map[string]string{
 		"PORT":           fmt.Sprintf("%d", port),
 		"DATABASE_URL":   dbPath,
-		"FLORE_LOG_FILE": filepath.Join(filepath.Dir(dbPath), "flore-backend.log"),
+		"FLORE_LOG_FILE": filepath.Join(filepath.Dir(dbPath), "florebackend.log"),
 		// 本地敏感接口鉴权 token，避免同机任意进程直接删除订阅源/导出数据库（M5）
 		"FLORE_API_TOKEN": a.apiToken,
 		// 桌面端前端 origin 可能是 Wails dev server 或 wails.localhost，
@@ -607,7 +691,7 @@ func (a *App) findGoBackend() string {
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
 	}
-	targetName := "flore-backend" + ext
+	targetName := "florebackend" + ext
 
 	if env := os.Getenv(backendPathEnv); env != "" {
 		if !filepath.IsAbs(env) {
@@ -651,7 +735,8 @@ func (a *App) findBackendByExecutable(targetName string) string {
 	return ""
 }
 
-// appDataDir 返回应用数据目录，是所有本地产物（数据库、日志、WebView2 缓存等）的统一落盘根。
+// appDataDir 返回应用数据目录（data/），存放数据库、日志与窗口状态等本地产物；
+// WebView2 缓存与备份目录由 auxRoot 单独管理，与 data/ 同级，不污染 data/。
 // 解析顺序：
 //  1. 环境变量 FLORE_DATA_DIR（显式指定，优先级最高）
 //  2. 便携模式：可执行文件同级目录存在 data/ 时，使用 data/（便携版跟随目录走）
@@ -683,11 +768,23 @@ func (a *App) findPortableDataDir() string {
 	return dataDir
 }
 
-// webviewDataPath 返回 WebView2 用户数据目录，统一收归到应用数据目录下，
-// 避免 Wails 默认把缓存散落到 %APPDATA%\[BinaryName.exe]。
+// auxRoot 返回辅助目录（webview2/、backups/）的根。
+// 便携模式：data/ 的父目录即 exe 目录，辅助目录与 data/ 同级，随包迁移；
+// 安装模式：沿用用户数据目录（可写，避免写入 Program Files）。
+func (a *App) auxRoot() string {
+	dir := a.appDataDir()
+	if filepath.Base(dir) == "data" {
+		return filepath.Dir(dir)
+	}
+	return dir
+}
+
+// webviewDataPath 返回 WebView2 用户数据目录，统一收归到辅助目录下，
+// 便携模式位于 exe 同级的 webview2/，安装模式位于用户数据目录，
+// 避免 Wails 默认把缓存散落到 %APPDATA%\[BinaryName.exe]，也不污染 data/。
 // WebView2 对无效路径会直接弹窗并报错退出，这里提前确保目录存在。
 func (a *App) webviewDataPath() string {
-	dir := filepath.Join(a.appDataDir(), "webview2")
+	dir := filepath.Join(a.auxRoot(), "webview2")
 	_ = os.MkdirAll(dir, 0700)
 	return dir
 }
@@ -1228,7 +1325,7 @@ type WindowState struct {
 
 // windowStateFilePath 返回窗口状态文件路径。
 func (a *App) windowStateFilePath() string {
-	return filepath.Join(a.appDataDir(), "window-state.json")
+	return filepath.Join(a.appDataDir(), "windowstate.json")
 }
 
 // SaveWindowState 保存窗口状态到本地文件（供前端调用）。
@@ -1248,7 +1345,7 @@ func (a *App) SaveWindowState(maximised bool) {
 		return
 	}
 
-	tmp, err := os.CreateTemp(dir, "window-state-*.tmp")
+	tmp, err := os.CreateTemp(dir, "windowstate*.tmp")
 	if err != nil {
 		a.logger.Printf("SaveWindowState: failed to create temp file: %v", err)
 		return

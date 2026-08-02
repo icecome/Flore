@@ -260,6 +260,22 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     notifyHideResult(results.length - succeededCount, ids.length);
   };
 
+  const moveSelectedSourcesToFolder = async (folderId: number | null) => {
+    const ids = [...selectedSourceIds];
+    if (ids.length === 0) return;
+    const results = await Promise.allSettled(ids.map((id) => updateSource(id, { folderId })));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    setSelectedSourceIds([]);
+    onSourcesChanged?.();
+    if (failed === 0) {
+      showToast(folderId == null ? '已移出文件夹' : '已移动到目标文件夹');
+    } else if (failed === ids.length) {
+      showToast('移动失败');
+    } else {
+      showToast(`部分移动失败（${failed}/${ids.length}）`);
+    }
+  };
+
   const toggleHideSource = async (source: Source) => {
     try {
       await updateSource(source.id, { hideInTimeline: !source.hideInTimeline });
@@ -536,7 +552,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
               />
               <Row
                 title="侧边栏隐藏私密订阅"
-                desc="在订阅列表中隐藏标记为私密的订阅源。"
+                desc="开启后，侧边栏隐藏标记为私密的订阅。"
                 control={
                   <Toggle
                     checked={settings.hidePrivateInSidebar}
@@ -546,7 +562,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
               />
               <Row
                 title="时间线隐藏私密文章"
-                desc="在全部文章中隐藏私密订阅源的文章。"
+                desc="开启后，时间线隐藏私密订阅的文章。"
                 control={
                   <Toggle
                     checked={settings.hidePrivateInTimeline}
@@ -842,6 +858,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
             onDeleteSource={deleteSingleSource}
             onHideSelected={hideSelectedSources}
             onHideSource={toggleHideSource}
+            onMoveSelectedToFolder={moveSelectedSourcesToFolder}
             onEditSource={(s) => setEditTarget(s)}
             onCheckAvailability={checkAvailability}
             onImportOPML={importOPML}

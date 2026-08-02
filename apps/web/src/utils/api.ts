@@ -36,6 +36,10 @@ interface WailsApp {
   SaveWindowState?: (maximised: boolean) => void;
   /** 桌面端提供后端 API Token，前端访问敏感接口时附加 Bearer 鉴权头（M5 集成） */
   GetAPIToken?: () => Promise<string>;
+  /** 检查更新，返回更新信息或 null（无更新）；仅桌面端可用 */
+  CheckForUpdate?: () => Promise<UpdateInfo | null>;
+  /** 应用已检查的更新（会触发应用重启） */
+  StartUpdate?: () => Promise<void>;
 }
 
 interface WailsRuntime {
@@ -547,6 +551,30 @@ export function putServerSettings(payload: Record<string, string>): Promise<void
 
 export function getVersion(): Promise<{ version: string }> {
   return fetchData<{ version: string }>('/version');
+}
+
+// 更新信息结构（桌面端自写更新器返回）
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  notes: string;
+  size: number;
+  fileName: string;
+  urls: string[];
+}
+
+/** 检查更新（仅桌面端），Web 端无更新能力时返回 null */
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  const app = getWailsApp();
+  if (!app?.CheckForUpdate) return null;
+  return app.CheckForUpdate();
+}
+
+/** 应用已检查的更新（仅桌面端），会触发进程重启 */
+export async function startUpdate(): Promise<void> {
+  const app = getWailsApp();
+  if (!app?.StartUpdate) throw new Error('当前环境不支持更新');
+  await app.StartUpdate();
 }
 
 /** 图片代理前缀，供正文图片重写使用 */

@@ -4,10 +4,22 @@ on:
   push:
     branches: [main, master]
     tags: ['v*']
+  pull_request:
+    branches: [main, master]
 
 jobs:
   build-desktop:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+          - os: macos-latest
+            goos: darwin
+          - os: ubuntu-latest
+            goos: linux
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +33,12 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install Linux build deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libgoocanvas-2.0-dev
+
       - name: Install Go dependencies
         run: cd server/go && go mod download
 
@@ -28,17 +46,19 @@ jobs:
         run: cd apps/desktop && go mod download
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: cd apps/web && npm ci
 
-      # 桌面壳依赖 Windows 专属 API（Job Object / MessageBox），只能在 windows runner 上 vet
       - name: Go vet (desktop)
         run: cd apps/desktop && go vet ./...
 
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
       - name: Build
-        run: npm run build:desktop
+        run: cd apps/desktop && wails build -ldflags "-X desktop.version=ci"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flore-desktop
-          path: apps/desktop/build/Flore-portable/
+          name: flore-desktop-${{ matrix.goos }}
+          path: apps/desktop/build/bin/

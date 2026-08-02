@@ -1,5 +1,5 @@
-import { useRef } from 'react';
-import { RefreshCw, Plus, Upload, Download, EyeOff, Pencil, Trash2, Circle } from '../icons';
+import { useRef, useState, useEffect } from 'react';
+import { RefreshCw, Plus, Upload, Download, EyeOff, Pencil, Trash2, Circle, FolderInput } from '../icons';
 import { cn } from '../../lib/cn';
 import type { Source, Folder } from '../../types';
 import { SmallBtn, IconBtn } from './SettingsShared';
@@ -26,6 +26,7 @@ interface Props {
   onImportOPML: (fileOrXml: File | string) => Promise<void>;
   onExportOPML: () => Promise<void>;
   onSourceFilterChange: (filter: 'all' | 'ok' | 'bad') => void;
+  onMoveSelectedToFolder: (folderId: number | null) => Promise<void>;
 }
 
 const SOURCE_FILTER_OPTIONS: { value: 'all' | 'ok' | 'bad'; label: string }[] = [
@@ -54,14 +55,28 @@ export default function SettingsSourcesTab(props: Props) {
     onImportOPML,
     onExportOPML,
     onSourceFilterChange,
+    onMoveSelectedToFolder,
   } = props;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderMap = new Map(folders.map((f) => [f.id, f.name]));
   const allSelected = filteredSources.length > 0 && selectedSourceIds.length === filteredSources.length;
+  const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const moveMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMoveMenu) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (moveMenuRef.current && !moveMenuRef.current.contains(e.target as Node)) {
+        setShowMoveMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [showMoveMenu]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <select
@@ -123,8 +138,8 @@ export default function SettingsSourcesTab(props: Props) {
           <p className="text-[13px]">暂无订阅源，点击添加订阅源开始使用</p>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <div className="grid grid-cols-12 bg-elevated px-3 py-2.5 text-[11.5px] font-semibold text-muted">
+        <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border border-border">
+          <div className="grid grid-cols-12 shrink-0 bg-elevated px-3 py-2.5 text-[11.5px] font-semibold text-muted">
             <div className="col-span-1 flex items-center justify-center">
               <input
                 type="checkbox"
@@ -230,6 +245,41 @@ export default function SettingsSourcesTab(props: Props) {
         <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
           <div className="flex items-center gap-1.5">
             <IconBtn icon={<EyeOff size={16} />} title="在全部文章隐藏" onClick={onHideSelected} />
+            <div className="relative" ref={moveMenuRef}>
+              <IconBtn
+                icon={<FolderInput size={16} />}
+                title="移动到文件夹"
+                onClick={() => setShowMoveMenu((v) => !v)}
+              />
+              {showMoveMenu && (
+                <div className="absolute bottom-full left-0 z-20 mb-2 w-44 rounded-md border border-border bg-elevated p-1 shadow-lg">
+                  <div className="px-2 py-1 text-[11px] text-muted">移动到</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onMoveSelectedToFolder(null);
+                      setShowMoveMenu(false);
+                    }}
+                    className="block w-full rounded px-2 py-1.5 text-left text-[13px] text-primary hover:bg-hover"
+                  >
+                    未分类
+                  </button>
+                  {folders.map((folder) => (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      onClick={() => {
+                        onMoveSelectedToFolder(folder.id);
+                        setShowMoveMenu(false);
+                      }}
+                      className="block w-full truncate rounded px-2 py-1.5 text-left text-[13px] text-primary hover:bg-hover"
+                    >
+                      {folder.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <IconBtn
               icon={<Trash2 size={16} />}
               title="取消订阅"

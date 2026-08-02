@@ -36,14 +36,14 @@ func main() {
 	}
 
 	// 配置日志输出到文件，方便调试分析。
-	// 优先使用 FLORE_LOG_FILE 环境变量；否则使用数据库同目录下的 flore-backend.log
+	// 优先使用 FLORE_LOG_FILE 环境变量；否则使用数据库同目录下的 florebackend.log
 	logFile := os.Getenv("FLORE_LOG_FILE")
 	if logFile == "" {
 		dbPath := os.Getenv("DATABASE_URL")
 		if dbPath == "" {
 			dbPath = "reader.db"
 		}
-		logFile = filepath.Join(filepath.Dir(dbPath), "flore-backend.log")
+		logFile = filepath.Join(filepath.Dir(dbPath), "florebackend.log")
 	}
 
 	// 日志级别由 FLORE_LOG_LEVEL 环境变量控制，默认 Info

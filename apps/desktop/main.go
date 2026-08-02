@@ -72,8 +72,8 @@ func main() {
 			},
 		},
 		// 将 WebView2 用户数据（localStorage/IndexedDB/Cookies/Cache 等）收归到
-		// 应用数据目录下的 webview2/，避免默认散落到 %APPDATA%\[BinaryName.exe]。
-		// 便携版下该目录位于 data/webview2，随便携包一起迁移，前端设置不再丢失。
+		// 辅助目录下的 webview2/（便携版位于 exe 同级，安装版位于用户数据目录），
+		// 避免默认散落到 %APPDATA%\[BinaryName.exe]，也不污染 data/。
 		Windows: &windows.Options{
 			WebviewUserDataPath: app.webviewDataPath(),
 		},

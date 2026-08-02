@@ -221,6 +221,18 @@ export default function Sidebar({
     return [...items].sort(compareFn);
   };
 
+  // 文件夹本身没有 unreadCount 字段，需要从 folderUnreadMap 查未读数再排序
+  const sortFoldersByUnreadDescThenName = useCallback(
+    (foldersToSort: Folder[]): Folder[] => {
+      return [...foldersToSort].sort((a, b) => {
+        const unreadDiff = folderUnread(b.id) - folderUnread(a.id);
+        if (unreadDiff !== 0) return unreadDiff;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      });
+    },
+    [folderUnread]
+  );
+
   function compareByHealth<T extends { name: string; unreadCount?: number }>(
     a: T, b: T, isUnhealthy?: (item: T) => boolean
   ): number {
@@ -281,7 +293,7 @@ export default function Sidebar({
     const unread = folderUnread(folder.id);
     const isSelected = selectedFolderId === folder.id;
     const sources = sortByUnreadDescThenName(folderSources(folder.id), isUnhealthySource);
-    const childFolders = sortByUnreadDescThenName(folderChildren(folder.id));
+    const childFolders = sortFoldersByUnreadDescThenName(folderChildren(folder.id));
 
     return (
       <FolderNode
@@ -306,7 +318,7 @@ export default function Sidebar({
   };
 
   const renderFolderTree = (rootFolders: Folder[]) => {
-    return sortByUnreadDescThenName(rootFolders).map(renderFolderNode);
+    return sortFoldersByUnreadDescThenName(rootFolders).map(renderFolderNode);
   };
 
   return (

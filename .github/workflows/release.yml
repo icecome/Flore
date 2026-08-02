@@ -1,0 +1,176 @@
+# Release workflow for Flore (W3 自动更新分发，跨平台构建).
+#
+# 触发：
+#   - 推送 v* 标签（如 v0.0.1-20260802）自动发布
+#   - workflow_dispatch 手动填写版本号发布
+#
+# 流程：
+#   1) build 矩阵（windows/macos/ubuntu）各自：wails build -> package-tool 产出 flore-<os>-<arch>.zip
+#   2) release 作业汇总所有 zip -> gen-manifest（仅 windows 入 manifest）-> 上传 R2（主通道）
+#      -> 发 GitHub Release（兜底通道，含全部平台 zip + update.json）
+#
+# 所需 GitHub Secrets（仓库 Settings -> Secrets）：
+#   R2_ACCOUNT_ID          Cloudflare 账户 ID
+#   R2_ACCESS_KEY_ID       R2 S3 兼容访问密钥 ID
+#   R2_SECRET_ACCESS_KEY   R2 S3 兼容私密访问密钥
+#   R2_BUCKET_NAME         R2 存储桶名称
+#
+# 前置：Cloudflare R2 存储桶需绑定自定义域 cdn-dl.icecome.com（公开访问），
+#       否则 update.json 与 zip 的公网 URL 无法解析。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不含 v 前缀，如 0.0.1-20260802）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Linux build deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libgoocanvas-2.0-dev
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Install Go dependencies
+        run: |
+          cd server/go && go mod download
+          cd ../../apps/desktop && go mod download
+
+      - name: Install web dependencies
+        run: cd apps/web && npm ci
+
+      - name: Build & package
+        shell: bash
+        run: |
+          VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          cd apps/desktop
+          wails build -ldflags "-X desktop.version=$VERSION"
+          FE_BIN=build/bin/Flore
+          if [ "${{ matrix.goos }}" = "windows" ]; then FE_BIN=build/bin/Flore.exe; fi
+          if [ "${{ matrix.goos }}" = "darwin" ]; then FE_BIN=build/bin/Flore.app; fi
+          go run ./cmd/package-tool -version "$VERSION" -os ${{ matrix.goos }} -arch ${{ matrix.goarch }} -feBin "$FE_BIN"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flore-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: apps/desktop/build/flore-*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.ver.outputs.tag }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect zips
+        run: |
+          mkdir -p apps/desktop/build
+          cp artifacts/flore-*/flore-*.zip apps/desktop/build/
+          ls -la apps/desktop/build/
+
+      - name: Generate update manifest (windows only)
+        run: |
+          cd apps/desktop
+          go run ./cmd/gen-manifest \
+            -version "${{ steps.ver.outputs.version }}" \
+            -dir ./build \
+            -baseURL https://cdn-dl.icecome.com \
+            -githubRepo icecome/Flore \
+            -notes "Flore ${{ steps.ver.outputs.tag }}" \
+            -platforms windows \
+            -out ./build/update.json
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: true
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          aws s3 cp "apps/desktop/build/flore-windows-amd64.zip" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/flore-windows-amd64.zip"
+          aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/update.json"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Flore ${{ steps.ver.outputs.tag }}
+          files: |
+            apps/desktop/build/flore-windows-amd64.zip
+            apps/desktop/build/flore-darwin-arm64.zip
+            apps/desktop/build/flore-linux-amd64.zip
+            apps/desktop/build/Flore-portable-${{ steps.ver.outputs.version }}.zip
+            apps/desktop/build/update.json
+          fail_on_unmatched_files: true

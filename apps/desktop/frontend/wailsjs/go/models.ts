@@ -29,3 +29,32 @@ export namespace main {
 
 }
 
+export namespace updater {
+	
+	export class UpdateInfo {
+	    currentVersion: string;
+	    latestVersion: string;
+	    notes: string;
+	    size: number;
+	    fileName: string;
+	    sha256: string;
+	    urls: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.notes = source["notes"];
+	        this.size = source["size"];
+	        this.fileName = source["fileName"];
+	        this.sha256 = source["sha256"];
+	        this.urls = source["urls"];
+	    }
+	}
+
+}
+

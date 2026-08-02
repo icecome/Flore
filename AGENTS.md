@@ -45,7 +45,7 @@ rss/                                   # 项目根目录
 │   │   ├── frontend/                  #   前端构建后的资源
 │   │   ├── build/                     #   桌面安装包构建产物（不提交）
 │   │   ├── wails.json                 #   Wails 配置
-│   │   ├── build-desktop.ps1          #   桌面构建脚本
+│   │   ├── build-frontend.mjs         #   跨平台前端构建（Node，替代 build-frontend.ps1）
 │   │   └── package.json
 │   └── routing-tool/                  #   独立路由工具项目（只读，不修改）
 │       ├── src/
@@ -285,7 +285,7 @@ import (
 |------|------|
 | 桌面壳 App | `apps/desktop/app.go` |
 | 桌面壳入口 | `apps/desktop/main.go` |
-| 桌面构建脚本 | `apps/desktop/build-desktop.ps1` |
+| 桌面构建/打包 | `apps/desktop/build-frontend.mjs` + `cmd/package-tool`（跨平台，替代原 .ps1） |
 | Wails 配置 | `apps/desktop/wails.json` |
 
 ### 6.4 文档
@@ -374,7 +374,7 @@ FilterRule → scope: global|source|folder
 ```
 package.json (version: 0.0.1-20260801)
     │
-    ├── build-desktop.ps1 读取 version → -ldflags 注入 Go 二进制
+    ├── 根 npm build:desktop 读取 version → wails build -ldflags 注入 Go 二进制
     │
     └── Go 后端 /api/version 返回 version
             └── 前端 SettingsAboutTab 调用此 API 动态显示

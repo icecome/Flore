@@ -92,15 +92,15 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
         <div className="flex items-center justify-between mb-5 gap-4">
           <div className="flex-1 min-w-0">
             <div className="text-base font-semibold text-primary mb-0.5">私密订阅</div>
-            <div className="text-xs text-muted">开启后，此订阅不再显示在个人资料页面。</div>
+            <div className="text-xs text-muted">开启后，此订阅标记为私密。</div>
           </div>
           <Toggle checked={isPrivate} onChange={setIsPrivate} />
         </div>
 
         <div className="flex items-center justify-between mb-5 gap-4">
           <div className="flex-1 min-w-0">
-            <div className="text-base font-semibold text-primary mb-0.5">在时间线上隐藏</div>
-            <div className="text-xs text-muted">开启后，此订阅将不再显示在主时间线中。</div>
+            <div className="text-base font-semibold text-primary mb-0.5">隐藏此源的文章</div>
+            <div className="text-xs text-muted">开启后，此订阅的文章不在文章列表显示。</div>
           </div>
           <Toggle checked={hideInTimeline} onChange={setHideInTimeline} />
         </div>

@@ -39,7 +39,6 @@ npm-debug.log*
 .history/
 .vscode/
 .idea/
-.workbuddy/
 .trae/
 
 # Wails build artifacts (desktop)
@@ -48,3 +47,6 @@ apps/desktop/build/bin/
 
 # Generated design previews
 .design/
+
+# AI assistant workspace (project data, do not commit)
+.workbuddy/

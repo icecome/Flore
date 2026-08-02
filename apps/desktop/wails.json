@@ -2,9 +2,9 @@
     "$schema":  "https://wails.io/schemas/config.v2.json",
     "name":  "flore",
     "outputfilename":  "Flore",
-    "frontend:install":  "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1 -Install",
-    "frontend:build":  "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1",
-    "frontend:dev:watcher":  "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1 -Dev",
+    "frontend:install":  "node ../build-frontend.mjs install",
+    "frontend:build":  "node ../build-frontend.mjs build",
+    "frontend:dev:watcher":  "node ../build-frontend.mjs dev",
     "frontend:dev:serverUrl":  "auto",
     "author":  {
                    "name":  "Lice",

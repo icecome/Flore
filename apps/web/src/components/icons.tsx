@@ -28,6 +28,7 @@ export {
   FileText,
   Upload,
   Folder,
+  FolderInput,
   BookOpen,
   Eye,
   EyeOff,

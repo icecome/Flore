@@ -1,10 +1,10 @@
 # Flore 桌面壳（Wails v2）
 
 Flore RSS 阅读器的 Windows 桌面外壳：内嵌 WebView2 承载 `apps/web` 前端，
-并以子进程方式拉起 `server/go` 后端（`flore-backend.exe`）。
+并以子进程方式拉起 `server/go` 后端（`florebackend.exe`）。
 
 - 技术栈：Go 1.26 + Wails v2.13 + energye/systray
-- 目标平台：Windows（x64）
+- 目标平台：Windows / macOS / Linux（x64 / arm64）
 
 ## 目录结构
 
@@ -17,10 +17,9 @@ apps/desktop/
 ├── job_other.go         # 非 Windows 平台的空实现
 ├── dialog_windows.go    # 启动失败时的原生 MessageBox
 ├── build/               # Wails 资源目录（图标 / manifest / installer 模板）
-├── frontend/dist/       # 由 build-frontend.ps1 从 apps/web 复制而来（不入库）
-├── build-desktop.ps1    # 【构建入口】
-├── build-frontend.ps1   # 前端构建 + 拷贝
-└── package-portable.ps1 # 便携包打包
+├── frontend/dist/       # 由 build-frontend.mjs 从 apps/web 复制而来（不入库）
+├── build-frontend.mjs   # 跨平台前端构建 + 拷贝（替代 build-frontend.ps1）
+└── cmd/package-tool/    # 跨平台便携包打包（替代 package-portable.ps1）
 ```
 
 ## 构建
@@ -29,23 +28,21 @@ apps/desktop/
 `go build` 不会生成 WebView2 应用清单、图标与版本信息资源，也不会触发前端构建，
 产出的 exe 无法正常运行。`go build ./...` 仅用于本地快速校验 Go 代码是否编译通过。
 
-推荐始终通过唯一入口脚本构建：
+推荐始终通过仓库根 npm 脚本（跨平台）构建：
 
-```powershell
-# 完整构建：后端 exe + 前端 + wails build + 便携包
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build-desktop.ps1
+```bash
+# 完整构建：后端 + 前端 + wails build + 便携包
+npm run build:desktop
 
-# 开发模式（wails dev，热重载；不会执行打包步骤）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\build-desktop.ps1 -Dev
+# 仅构建前端（开发态）
+npm run build:web
 ```
 
-脚本会依次完成：
+`npm run build:desktop` 会依次：
 
-1. 从根 `package.json` 读取版本号（**唯一版本源**），并写入 `wails.json` 的 `info.productVersion`
-2. 优雅停止正在运行的 `Flore` / `flore-backend`（先 `CloseMainWindow`，超时才 Kill）
-3. `go build` 后端到 `build/bin/flore-backend.exe`
-4. `wails build` 产出 `build/bin/Flore.exe`（内部调用 `build-frontend.ps1` 构建并拷贝前端）
-5. `package-portable.ps1` 生成 `build/Flore-portable-<version>.zip`
+1. `npm run build:go` 用根 `package.json` 版本号（**唯一版本源**）ldflags 注入后端，产出 `build/bin/florebackend[.exe]`
+2. `wails build -ldflags "-X desktop.version=..."` 产出前端可执行文件（内部经 `wails.json` 的 `frontend:build` 调用 `build-frontend.mjs` 构建并拷贝前端到 `frontend/dist`）
+3. `go run ./cmd/package-tool` 生成 `build/flore-<os>-<arch>.zip` 与 `build/Flore-portable-<version>.zip`
 
 前置依赖：Go 1.26+、Node.js（`apps/web` 构建）、`wails` CLI（`go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0`，可执行文件位于 `$(go env GOPATH)/bin`）、WebView2 Runtime。
 
@@ -75,10 +72,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-desktop.ps1 -Dev
 
 1. 环境变量 `FLORE_DATA_DIR`
 2. **便携模式**：exe 同级存在 `data/` 目录时使用它（便携包中已预置 `data/.keep` 占位文件，
-   确保解压后目录存在；空目录会被 `Compress-Archive` 丢弃）
+   确保解压后目录存在；空目录在打包时会被丢弃，故以 `.keep` 占位）
 3. 回退：`%LOCALAPPDATA%\Flore`（无则 `%APPDATA%\Flore`）
 
-该目录下存放 `reader.db`、`flore-desktop.log`、`flore-backend.log`、`window-state.json`、`webview2/`。
+`data/` 下存放 `reader.db`、`floredesktop.log`、`florebackend.log`、`windowstate.json`；
+`webview2/`（WebView2 缓存）与 `backups/`（备份）位于 exe 同级目录，与 `data/` 并列（便携包已预置占位文件）。
 
 ### 后端二进制查找
 
@@ -113,7 +111,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build-desktop.ps1 -Dev
 - **单实例锁**：Wails `SingleInstanceLock`（`UniqueId = flore-rss-reader-desktop`）。
   第二个实例会把参数发给已运行实例并自杀，已运行实例负责 `WindowUnminimise + WindowShow`。
 - **Job Object**：后端子进程被加入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job，
-  主进程崩溃或被强杀时由内核连带终止后端，杜绝孤儿 `flore-backend.exe` 持有 SQLite WAL。
+  主进程崩溃或被强杀时由内核连带终止后端，杜绝孤儿 `florebackend.exe` 持有 SQLite WAL。
 - **重启**：`RestartApp` 用 `CREATE_BREAKAWAY_FROM_JOB` 启动新实例并传入旧实例 PID，
   新实例在 `wails.Run` 之前等待旧实例退出（互斥体释放）后再继续。
 

@@ -1414,9 +1414,16 @@ func (s *ReaderService) GetDatabaseInfo() (*DatabaseInfo, error) {
 	return info, nil
 }
 
-// getBackupDir 返回备份目录路径（数据库同级 backups/ 子目录）
+// getBackupDir 返回备份目录路径。
+// 便携模式数据库位于 <root>/data/reader.db，备份目录提升到 <root>/backups，
+// 与 data/ 同级，使 data/ 只承载数据与日志；安装模式数据库直接在用户数据目录，
+// 备份目录保持为数据库同级的 backups/。
 func getBackupDir(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "backups")
+	dir := filepath.Dir(dbPath)
+	if filepath.Base(dir) == "data" {
+		dir = filepath.Dir(dir)
+	}
+	return filepath.Join(dir, "backups")
 }
 
 // BackupDirPath 返回备份目录绝对路径（供 handler 安全构造下载路径）
