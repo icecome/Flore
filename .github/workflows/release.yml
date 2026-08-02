@@ -129,7 +129,7 @@ jobs:
             if [ -z "$MAKENSIS" ]; then
               echo "makensis.exe not found"; exit 1
             fi
-            "$MAKENSIS" installer.nsi
+            "$MAKENSIS" -DARG_WAILS_AMD64_BINARY="build\bin\Flore.exe" installer.nsi
             go run ./cmd/package-tool -edition setup -version "$VERSION" -os windows -arch amd64 -setupBin build/bin/Flore-installer.exe
             # 清理便携目录（NSIS 已用毕）
             rm -rf build/Flore-portable
