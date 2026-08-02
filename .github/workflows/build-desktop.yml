@@ -17,7 +17,7 @@ jobs:
             goos: windows
           - os: macos-latest
             goos: darwin
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             goos: linux
     runs-on: ${{ matrix.os }}
     steps:
@@ -37,7 +37,7 @@ jobs:
         if: matrix.goos == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libgoocanvas-2.0-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev
 
       - name: Install Go dependencies
         run: cd server/go && go mod download
@@ -62,7 +62,9 @@ jobs:
         run: |
           cd apps/desktop
           node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"ci\"\n')"
-          wails build
+          TAGS=""
+          if [ "${{ matrix.goos }}" = "linux" ]; then TAGS="-tags webkit2gtk_4_1"; fi
+          wails build $TAGS
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
