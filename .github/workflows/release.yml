@@ -121,7 +121,15 @@ jobs:
           # Windows 安装版（仅此平台）
           if [ "${{ matrix.goos }}" = "windows" ]; then
             choco install nsis -y
-            makensis installer.nsi
+            # Chocolatey 安装 NSIS 到 C:\Program Files (x86)\NSIS\，但可能不在 PATH 中
+            MAKENSIS=""
+            for p in "/c/Program Files (x86)/NSIS/makensis.exe" "/c/ProgramData/chocolatey/lib/nsis/tools/makensis.exe"; do
+              if [ -f "$p" ]; then MAKENSIS="$p"; break; fi
+            done
+            if [ -z "$MAKENSIS" ]; then
+              echo "makensis.exe not found"; exit 1
+            fi
+            "$MAKENSIS" installer.nsi
             go run ./cmd/package-tool -edition setup -version "$VERSION" -os windows -arch amd64 -setupBin build/bin/Flore-installer.exe
             # 清理便携目录（NSIS 已用毕）
             rm -rf build/Flore-portable
