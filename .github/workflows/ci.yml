@@ -26,7 +26,7 @@ jobs:
         run: cd server/go && go mod download
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: cd apps/web && npm ci
 
       # T1：格式门禁。gofmt 不需要依赖，可对全部 Go 模块（含仅能在 Windows 构建的桌面壳）统一检查。
       - name: Go format check
