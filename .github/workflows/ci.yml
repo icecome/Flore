@@ -45,7 +45,7 @@ jobs:
         run: cd server/go && go test -cover ./...
 
       - name: TypeScript check
-        run: cd apps/web && npx tsc --noEmit
+        run: cd apps/web && npx --no-install tsc --noEmit
 
       - name: Build Go backend
         run: cd server/go && go build ./...
