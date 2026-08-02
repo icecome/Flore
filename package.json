@@ -1,7 +1,7 @@
 {
   "name": "flore",
   "private": true,
-  "version": "0.0.1-20260802",
+  "version": "0.1.0-20260802",
   "description": "又一个 RSS 阅读器。",
   "scripts": {
     "dev": "concurrently \"npm run dev:go\" \"npm run dev:web\"",

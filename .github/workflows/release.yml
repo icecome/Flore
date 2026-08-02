@@ -95,7 +95,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: flore-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: apps/desktop/build/flore-*.zip
+          path: apps/desktop/build/*.zip
 
   release:
     needs: build
@@ -135,7 +135,7 @@ jobs:
       - name: Collect zips
         run: |
           mkdir -p apps/desktop/build
-          cp artifacts/flore-*/flore-*.zip apps/desktop/build/
+          cp artifacts/flore-*/*.zip apps/desktop/build/
           ls -la apps/desktop/build/
 
       - name: Generate update manifest (windows only)

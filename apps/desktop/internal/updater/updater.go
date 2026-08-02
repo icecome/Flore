@@ -28,10 +28,6 @@ func CheckForUpdate(currentVersion string) (*UpdateInfo, error) {
 	if CompareVersion(manifest.Latest, currentVersion) <= 0 {
 		return nil, nil
 	}
-	// 低于最小支持版本时仍返回更新信息，由上层强制提示更新。
-	if manifest.MinSupported != "" && CompareVersion(currentVersion, manifest.MinSupported) < 0 {
-		_ = manifest.MinSupported
-	}
 	asset := matchAsset(manifest)
 	if asset == nil {
 		return nil, fmt.Errorf("未找到适配平台 %s 的更新资产", currentPlatform())

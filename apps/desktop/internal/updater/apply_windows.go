@@ -72,6 +72,8 @@ taskkill /F /IM florebackend.exe >nul 2>&1
 timeout /t 1 /nobreak >nul
 xcopy /y /e /i "{SRC}\*" "{DST}\" >nul
 start "" "{SELF}"
+rem 清理临时目录（bat 自身所在目录），失败不影响更新结果
+rmdir /s /q "%~dp0"
 `
 	s := strings.ReplaceAll(tpl, "{PID}", strconv.Itoa(pid))
 	s = strings.ReplaceAll(s, "{SRC}", srcDir)

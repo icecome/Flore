@@ -7,7 +7,7 @@
 //	  -version 0.0.1-20260803 \
 //	  -dir ./dist \
 //	  -baseURL https://cdn-dl.icecome.com \
-//	  -githubRepo icecome/flore \
+//	  -githubRepo icecome/Flore \
 //	  -notes "修复若干已知问题" \
 //	  -out update.json
 package main
@@ -16,8 +16,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,7 +169,7 @@ func copyHash(h interface{ Write([]byte) (int, error) }, src *os.File) (int64, e
 			total += int64(n)
 		}
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				return total, nil
 			}
 			return total, err
