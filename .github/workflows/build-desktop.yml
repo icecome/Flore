@@ -30,6 +30,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # 桌面壳依赖 Windows 专属 API（Job Object / MessageBox），只能在 windows runner 上 vet
+      - name: Go vet (desktop)
+        run: cd apps/desktop && go vet ./...
+
       - name: Build
         run: npm run build:desktop
 

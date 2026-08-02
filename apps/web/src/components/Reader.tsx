@@ -2,9 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Globe } from './icons';
 import DOMPurify, { type Config as PurifyConfig } from 'dompurify';
 import type { Item } from '../types';
-import { cn, formatFull } from '../lib/cn';
+import { cn } from '../lib/cn';
+import { formatFull } from '../lib/format';
 import { type AppSettings, resolveReaderTheme } from '../utils/settings';
-import { openExternal, getApi, isDesktop, savePNGFile } from '../utils/api';
+import {
+  openExternal,
+  savePNGFile,
+  getReadability,
+  getImageProxyBase,
+  getArticleProxyUrl,
+  checkArticleFrameable,
+} from '../utils/api';
 import { showToast } from '../utils/toast';
 import EmptyState from './EmptyState';
 import Loading from './Loading';
@@ -37,19 +45,34 @@ const PURIFY_CONFIG: PurifyConfig = {
   FORBID_ATTR: ['style', 'class', 'id'],
   FORBID_TAGS: ['form', 'input', 'button', 'textarea', 'select', 'style', 'script', 'iframe', 'object', 'embed'],
   ALLOW_DATA_ATTR: false,
-  // 允许 target=_blank 但强制 rel=noopener
+  // 允许 target=_blank 但强制 rel=noopener（由下方 afterSanitizeAttributes 钩子落实）
   ADD_ATTR: ['target', 'rel'],
 };
 
+// 强制所有外链带 target=_blank + rel="noopener noreferrer"，杜绝反向 tabnabbing。
+// 钩子是全局的，模块加载时注册一次即可。
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.nodeName !== 'A' || !node.hasAttribute('href')) return;
+  node.setAttribute('target', '_blank');
+  node.setAttribute('rel', 'noopener noreferrer');
+});
+
 /** 提取文章全文内容，供 useEffect 和手动切换模式复用 */
 async function fetchReadability(itemId: number, signal: AbortSignal): Promise<{ content: string; title: string }> {
-  const res = await fetch(`${getApi()}/items/${itemId}/readability`, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = (await res.json()) as { content: string; title: string };
+  const data = await getReadability(itemId, signal);
   return {
     content: data.content || '<p>无法提取全文内容</p>',
     title: data.title || '',
   };
+}
+
+/** 把正文里的链接解析为绝对地址；无法解析时返回 null */
+function resolveArticleHref(href: string, base?: string): string | null {
+  try {
+    return new URL(href, base || window.location.href).href;
+  } catch {
+    return null;
+  }
 }
 
 /** 全文模式请求失败时的兜底文案 */
@@ -62,7 +85,7 @@ const READABILITY_ERROR_HTML = '<p>提取全文内容失败，请检查网络连
  *  @param articleUrl 文章原文 URL，作为图片代理的 referer 参数（用于防盗链）与相对路径 base
  */
 function rewriteImageUrls(html: string, articleUrl?: string): string {
-  const proxyBase = `${getApi()}/image-proxy`;
+  const proxyBase = getImageProxyBase();
 
   function resolveSrc(src: string): string | null {
     if (src.startsWith('data:') || src.startsWith('blob:') || src.includes('/image-proxy')) return null;
@@ -144,7 +167,7 @@ function rewriteImageUrls(html: string, articleUrl?: string): string {
  *  每个条目由 URL + 可选宽度/像素密度描述符组成。
  */
 function rewriteSrcset(srcset: string, articleUrl?: string): string {
-  const proxyBase = `${getApi()}/image-proxy`;
+  const proxyBase = getImageProxyBase();
 
   function resolveSrc(src: string): string | null {
     if (src.startsWith('data:') || src.startsWith('blob:') || src.includes('/image-proxy')) {
@@ -203,7 +226,7 @@ function rewriteSrcset(srcset: string, articleUrl?: string): string {
  *  @param articleUrl 文章原文 URL，用于解析相对路径和设置 Referer
  */
 function rewriteIframeContent(html: string, articleUrl?: string): string {
-  const proxyBase = `${getApi()}/image-proxy`;
+  const proxyBase = getImageProxyBase();
 
   function resolveSrc(src: string): string | null {
     if (src.startsWith('data:') || src.startsWith('blob:') || src.includes('/image-proxy')) {
@@ -397,7 +420,7 @@ export default function Reader({
   }, [item?.id, item?.isRead, settings.markReadMode, onToggleRead]);
 
   const rafRef = useRef<number | null>(null);
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
@@ -406,32 +429,7 @@ export default function Reader({
       const max = el.scrollHeight - el.clientHeight;
       setProgress(max <= 0 ? 0 : Math.min(100, (el.scrollTop / max) * 100));
     });
-  };
-
-  const onCopyLink = async (link: string) => {
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(link);
-        showToast('链接已复制');
-      } catch {
-        showToast('复制失败');
-      }
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = link;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand('copy');
-        showToast('链接已复制');
-      } catch {
-        showToast('复制失败');
-      }
-      document.body.removeChild(ta);
-    }
-  };
+  }, []);
 
   const [effectiveAppTheme, setEffectiveAppTheme] = useState<'light' | 'dark'>(() =>
     document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
@@ -558,66 +556,79 @@ export default function Reader({
   }, [item]);
 
   /** 切换全文模式（摘要 / 全文） */
-  const onToggleReaderMode = async () => {
+  const onToggleReaderMode = useCallback(async () => {
     if (displayMode === 'readability') {
       setDisplayMode('rss');
       return;
     }
     setDisplayMode('readability');
-    if (!readabilityContent && item?.link) {
-      // 取消上一次未完成的全文请求
-      readabilityAbortRef.current?.abort();
-      const controller = new AbortController();
-      readabilityAbortRef.current = controller;
-      setLoadingReadability(true);
-      try {
-        const { content, title } = await fetchReadability(item.id, controller.signal);
-        setReadabilityContent(content);
-        setReadabilityTitle(title);
-      } catch (err) {
-        if ((err as Error).name === 'AbortError') return;
-        console.error('Failed to fetch full content:', err);
-        setReadabilityContent(READABILITY_ERROR_HTML);
-      } finally {
-        if (readabilityAbortRef.current === controller) {
-          setLoadingReadability(false);
-          readabilityAbortRef.current = null;
-        }
+    if (readabilityContent || !item?.link) return;
+    // 取消上一次未完成的全文请求
+    readabilityAbortRef.current?.abort();
+    const controller = new AbortController();
+    readabilityAbortRef.current = controller;
+    setLoadingReadability(true);
+    try {
+      const { content, title } = await fetchReadability(item.id, controller.signal);
+      setReadabilityContent(content);
+      setReadabilityTitle(title);
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      console.error('Failed to fetch full content:', err);
+      showToast('提取全文失败');
+      setReadabilityContent(READABILITY_ERROR_HTML);
+    } finally {
+      if (readabilityAbortRef.current === controller) {
+        setLoadingReadability(false);
+        readabilityAbortRef.current = null;
       }
     }
-  };
+  }, [displayMode, readabilityContent, item?.id, item?.link]);
 
   /** 切换网页模式（摘要 / 网页） */
-  // 注意：L538 的 displayMode 是闭包旧值，但条件判断恰好符合预期：
+  // 注意：此处的 displayMode 是闭包旧值，但条件判断恰好符合预期：
   // 旧值非 iframe → 切换后将是 iframe → 需要加载 iframe 内容
-  const onToggleViewOriginal = async () => {
-    setDisplayMode((prev) => {
-      if (prev === 'iframe') return 'rss';
-      return 'iframe';
-    });
-    if (displayMode !== 'iframe' && item?.link) {
-      // 预检原文是否可被 iframe 直接嵌入，决定直连还是走最小代理：
-      // - 可嵌入 → 直连 item.link（CSS/JS/图片全由原站加载，最稳；sandbox 含 allow-same-origin）
-      // - 不可嵌入（XFO/CSP）或混合内容 → 走 /proxy/:id 最小代理（清头 + 注入 base；sandbox 去 allow-same-origin）
-      setLoadingIframe(true);
-      try {
-        const res = await fetch(`${getApi()}/proxy/check/${item.id}`);
-        const data = await res.json();
-        const mixed = typeof data.url === 'string' && data.url.startsWith('http://') && window.location.protocol === 'https:';
-        if (data.frameable && !mixed) {
-          setIframeUsesProxy(false);
-          setIframeSrc(data.url || item.link);
-        } else {
-          setIframeUsesProxy(true);
-          setIframeSrc(`${getApi()}/proxy/${item.id}`);
-        }
-      } catch {
-        // 预检失败 → 保守走代理
-        setIframeUsesProxy(true);
-        setIframeSrc(`${getApi()}/proxy/${item.id}`);
+  const onToggleViewOriginal = useCallback(async () => {
+    setDisplayMode((prev) => (prev === 'iframe' ? 'rss' : 'iframe'));
+    if (displayMode === 'iframe' || !item?.link) return;
+    // 预检原文是否可被 iframe 直接嵌入，决定直连还是走最小代理：
+    // - 可嵌入 → 直连 item.link（CSS/JS/图片全由原站加载，最稳；sandbox 含 allow-same-origin）
+    // - 不可嵌入（XFO/CSP）或混合内容 → 走 /proxy/:id 最小代理（清头 + 注入 base；sandbox 去 allow-same-origin）
+    setLoadingIframe(true);
+    try {
+      const data = await checkArticleFrameable(item.id);
+      const mixed = typeof data.url === 'string' && data.url.startsWith('http://') && window.location.protocol === 'https:';
+      if (data.frameable && !mixed) {
+        setIframeUsesProxy(false);
+        setIframeSrc(data.url || item.link);
+        return;
       }
+      setIframeUsesProxy(true);
+      setIframeSrc(getArticleProxyUrl(item.id));
+    } catch (err) {
+      // 预检失败 → 保守走代理
+      console.error('Frameable precheck failed:', err);
+      showToast('原文嵌入预检失败，已改用代理模式');
+      setIframeUsesProxy(true);
+      setIframeSrc(getArticleProxyUrl(item.id));
     }
-  };
+  }, [displayMode, item?.id, item?.link]);
+
+  /** 拦截正文内链接点击：交给系统浏览器打开，避免桌面壳整窗跳外站后无法返回 */
+  const handleContentClick = useCallback((e: React.MouseEvent) => {
+    const anchor = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!anchor) return;
+    const href = anchor.getAttribute('href') ?? '';
+    // 页内锚点交给浏览器默认行为
+    if (!href || href.startsWith('#')) return;
+    e.preventDefault();
+    const resolved = resolveArticleHref(href, item?.link);
+    if (!resolved) {
+      showToast('无效的链接');
+      return;
+    }
+    openExternal(resolved);
+  }, [item?.link]);
 
   const handleContentContextMenu = useCallback((e: React.MouseEvent) => {
     if (displayMode === 'iframe' || !item) return;
@@ -681,6 +692,7 @@ export default function Reader({
       <div
         ref={scrollRef}
         onScroll={onScroll}
+        onClick={handleContentClick}
         onContextMenu={handleContentContextMenu}
         className="flex-1 overflow-y-auto animate-reader-fade-in"
         style={readerStyle}

@@ -2,9 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Source, Folder } from '../types';
 import type { AppSettings } from '../utils/settings';
-import { getApi } from '../utils/api.js';
+import { countItems, listFolders, listSources } from '../utils/api';
 import { showToast } from '../utils/toast';
-import { fetchData } from '../utils/fetchData';
 
 export interface UseSourcesDataResult {
   sources: Source[];
@@ -33,7 +32,7 @@ export function useSourcesData(
   // 获取文件夹列表
   const fetchFolders = useCallback(async () => {
     try {
-      const data = await fetchData<Folder[]>('/folders', { cache: 'no-store' });
+      const data = await listFolders();
       setFolders(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch folders:', err);
@@ -45,7 +44,7 @@ export function useSourcesData(
   const fetchSources = useCallback(async () => {
     setLoadingSources(true);
     try {
-      const data = await fetchData<Source[]>('/sources', { cache: 'no-store' });
+      const data = await listSources();
       setSources(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch sources:', err);
@@ -68,16 +67,13 @@ export function useSourcesData(
         params.append('hidePrivate', 'true');
       }
       params.append('unread', 'true');
-      const res = await fetch(`${getApi()}/items/count?${params.toString()}`, { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { count: number };
-      setUnreadCountInScope(typeof data.count === 'number' ? data.count : 0);
+      setUnreadCountInScope(await countItems(params, signal));
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch unread count:', err);
       showToast('获取未读数失败');
     }
-  }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline, getApi, showToast]);
+  }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline]);
 
   // 初始加载
   useEffect(() => {
@@ -94,7 +90,7 @@ export function useSourcesData(
     if (badCount > 0) {
       showToast(`${badCount} 个订阅源异常，请在设置中查看详情`);
     }
-  }, [sources, showToast]);
+  }, [sources]);
 
   return {
     sources,

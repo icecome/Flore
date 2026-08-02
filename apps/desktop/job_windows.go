@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"syscall"
@@ -110,5 +111,13 @@ func waitForProcessExit(pid int, timeout time.Duration) {
 		return
 	}
 	defer windows.CloseHandle(h)
-	_, _ = windows.WaitForSingleObject(h, uint32(timeout/time.Millisecond))
+	status, _ := windows.WaitForSingleObject(h, uint32(timeout/time.Millisecond))
+	switch status {
+	case windows.WAIT_OBJECT_0:
+		// 进程正常退出
+	case uint32(windows.WAIT_TIMEOUT):
+		slog.Warn("waitForProcessExit: timeout waiting for process", "pid", pid, "timeout", timeout)
+	case uint32(windows.WAIT_FAILED):
+		slog.Warn("waitForProcessExit: WaitForSingleObject failed", "pid", pid)
+	}
 }

@@ -33,7 +33,7 @@ type FeedItem struct {
 // FeedCond 携带条件请求头，用于增量抓取（HTTP 304 协商）
 type FeedCond struct {
 	IfModifiedSince *string
-	IfNoneMatch    *string
+	IfNoneMatch     *string
 }
 
 // FeedFetchMeta 抓取响应元数据，用于回写 Last-Modified / ETag 供下次条件请求
@@ -60,36 +60,36 @@ type rssChannel struct {
 }
 
 type rssItem struct {
-	Title       string   `xml:"title"`
-	Link        string   `xml:"link"`
-	Description string   `xml:"description"`
-	Author      string   `xml:"author"`
-	PubDate     string   `xml:"pubDate"`
-	GUID        rssGUID  `xml:"guid"`
-	Content     string   `xml:"encoded"`
+	Title       string  `xml:"title"`
+	Link        string  `xml:"link"`
+	Description string  `xml:"description"`
+	Author      string  `xml:"author"`
+	PubDate     string  `xml:"pubDate"`
+	GUID        rssGUID `xml:"guid"`
+	Content     string  `xml:"encoded"`
 }
 
 type rssGUID struct {
-	Value string `xml:",chardata"`
-	IsPermaLink bool `xml:"isPermaLink,attr"`
+	Value       string `xml:",chardata"`
+	IsPermaLink bool   `xml:"isPermaLink,attr"`
 }
 
 // atomFeed Atom 结构
 type atomFeed struct {
-	XMLName xml.Name   `xml:"feed"`
-	Title   string     `xml:"title"`
+	XMLName xml.Name    `xml:"feed"`
+	Title   string      `xml:"title"`
 	Entries []atomEntry `xml:"entry"`
 }
 
 type atomEntry struct {
-	Title     string    `xml:"title"`
-	Link      atomLink  `xml:"link"`
-	Summary   string    `xml:"summary"`
-	Content   string    `xml:"content"`
+	Title     string     `xml:"title"`
+	Link      atomLink   `xml:"link"`
+	Summary   string     `xml:"summary"`
+	Content   string     `xml:"content"`
 	Author    atomAuthor `xml:"author"`
-	Published string    `xml:"published"`
-	Updated   string    `xml:"updated"`
-	ID        string    `xml:"id"`
+	Published string     `xml:"published"`
+	Updated   string     `xml:"updated"`
+	ID        string     `xml:"id"`
 }
 
 type atomLink struct {
@@ -114,7 +114,7 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 
 	source, err := s.GetSource(sourceID)
 	if err != nil {
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, fmt.Sprintf("source not found: %v", err))
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, fmt.Sprintf("source not found: %v", err), 0, source.Interval)
 		return 0, fmt.Errorf("source not found: %w", err)
 	}
 
@@ -132,12 +132,12 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 	if err != nil {
 		if errors.Is(err, ErrNotModified) {
 			// 源未变化（304）：视为可访问，清退避；无新内容不更新 LastSuccessAt 语义
-			s.updateSourceHealth(sourceID, now, now, "")
+			s.updateSourceHealth(sourceID, now, now, "", 0, source.Interval)
 			slog.Info("fetch not modified (304)", "source", source.Name, "url", source.URL)
 			return 0, nil
 		}
 		errMsg := err.Error()
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg)
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg, 0, source.Interval)
 		if fetchDuration > 5*time.Second {
 			slog.Warn("fetch slow (failed)", "source", source.Name, "url", source.URL, "duration", fetchDuration, "error", err)
 		}
@@ -148,13 +148,13 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 	newCount, err := s.upsertFeedItems(sourceID, items)
 	if err != nil {
 		errMsg := err.Error()
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg)
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg, 0, source.Interval)
 		return 0, fmt.Errorf("failed to upsert feed items: %w", err)
 	}
 	upsertDuration := time.Since(upsertStart)
 	totalDuration := time.Since(fetchStart)
 
-	s.updateSourceHealth(sourceID, now, now, "")
+	s.updateSourceHealth(sourceID, now, now, "", newCount, source.Interval)
 
 	// 回写条件请求头（Last-Modified / ETag），供下次增量抓取
 	if meta != nil {
@@ -442,9 +442,7 @@ func parseFeedDate(raw string) time.Time {
 }
 
 // upsertFeedItems 将 feed 条目写入数据库，按 link 去重。
-// 批量查询已有 link 避免逐条 N+1 查询；事务提交后同步内联处理索引与过滤。
-// 索引不再单独起 goroutine：FetchCoordinator 的 worker 已串行执行整条流水线，
-// 同步索引既避免竞态，又不增加额外 goroutine 开销。
+// 批量查询已有 link 避免逐条 N+1 查询；新文章 ID 推入 indexChan 由后台 goroutine 批量索引。
 func (s *ReaderService) upsertFeedItems(sourceID int, items []FeedItem) (int, error) {
 	validItems := filterValidItems(items)
 	if len(validItems) == 0 {
@@ -464,11 +462,19 @@ func (s *ReaderService) upsertFeedItems(sourceID int, items []FeedItem) (int, er
 	// 有新未读写入时使未读计数缓存失效，下次 GetSources 重算（P2-1/B）
 	if len(newItemIDs) > 0 {
 		s.invalidateUnreadCount()
-	}
-
-	// 同步内联处理索引与过滤，事务已提交，无竞态
-	for _, id := range newItemIDs {
-		s.applyFiltersAndIndex(id)
+		// 将新文章 ID 推入批量索引通道，由后台 goroutine 异步处理 FTS5 + 过滤规则
+		// 使用非阻塞发送：通道满时跳过，不影响核心抓取流程
+		for _, id := range newItemIDs {
+			select {
+			case s.indexChan <- id:
+				s.indexWG.Add(1)
+			default:
+				// 通道满，降级为同步处理，避免阻塞 worker
+				if err := s.indexBatch([]int{id}); err != nil {
+					slog.Warn("index batch failed (fallback)", "item_id", id, "error", err)
+				}
+			}
+		}
 	}
 	// 返回本轮新增条目数，供 Coordinator 累计与前端通知计数使用（根治 C-02）
 	return len(newItemIDs), nil
@@ -568,5 +574,3 @@ func (s *ReaderService) applyFiltersAndIndex(itemID int) {
 		slog.Warn("index item failed", "item_id", itemID, "error", err)
 	}
 }
-
-

@@ -1,11 +1,19 @@
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { Folder, Item, Source } from '../types';
-import { getApi, openExternal } from './api';
+import { getItemMarkdownUrl, openExternal } from './api';
 import { showToast } from './toast';
 
 // 通用：安全打开外部 URL（仅允许 http/https）
 // 已合并到 openExternal（utils/api.ts），此处保留别名兼容
 export const safeOpenUrl = openExternal;
+
+/** 触发单篇文章的 Markdown 下载（地址由 api 层统一提供） */
+function downloadItemMarkdown(itemId: number): void {
+  const a = document.createElement('a');
+  a.href = getItemMarkdownUrl(itemId);
+  a.download = '';
+  a.click();
+}
 
 // ---------- Sidebar: 订阅源 ----------
 
@@ -137,7 +145,7 @@ export function buildArticleRowMenu(
     },
     {
       id: 'export-md', label: '导出为 Markdown',
-      onClick: () => { const a = document.createElement('a'); a.href = `${getApi()}/items/${item.id}/export.md`; a.download = ''; a.click(); },
+      onClick: () => downloadItemMarkdown(item.id),
     },
     { id: 'sep-2', label: '', separator: true },
     { id: 'read-above', label: '将以上标记为已读', disabled: aboveIds.length === 0, onClick: () => h.onBatchMarkRead(aboveIds, true) },
@@ -219,7 +227,7 @@ export function buildReaderContentMenu(
     { id: 'sep-3', label: '', separator: true },
     {
       id: 'export-md', label: '导出为 Markdown',
-      onClick: () => { const a = document.createElement('a'); a.href = `${getApi()}/items/${item.id}/export.md`; a.download = ''; a.click(); },
+      onClick: () => downloadItemMarkdown(item.id),
     },
   );
   return items;

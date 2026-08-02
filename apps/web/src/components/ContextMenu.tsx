@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { cn } from '../lib/cn';
+import { showToast } from '../utils/toast';
 
 export interface ContextMenuItem {
   id: string;
@@ -73,7 +74,9 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
               try {
                 await item.onClick?.();
               } catch (err) {
+                // 菜单项自身未捕获的异常在此兜底，必须给出反馈否则点击像"没反应"
                 console.error('ContextMenu item click error:', err);
+                showToast('操作失败，请重试');
               } finally {
                 onClose();
               }

@@ -31,11 +31,24 @@ import {
   applyAccentColor,
 } from '../utils/settings';
 import type { Source, Folder, FilterRule, FilterCondition } from '../types';
-import { getApi, getDesktopApp, downloadBlob } from '../utils/api';
+import {
+  getDesktopApp,
+  downloadBlob,
+  deleteSourcesBatch,
+  updateSource,
+  triggerFetch,
+  importOPML as importOPMLApi,
+  restoreDatabase,
+  getDatabaseExportUrl,
+  listFilterRules,
+  saveFilterRule,
+  deleteFilterRule,
+} from '../utils/api';
 import { showToast } from '../utils/toast';
 import ConfirmDialog from './ConfirmDialog';
 import { Section, Row, Toggle, Select, Slider } from './settings/SettingsShared';
 import SettingsSourcesTab from './settings/SettingsSourcesTab';
+import EditSourceModal from './EditSourceModal';
 import SettingsRulesTab, { type RuleFormState } from './settings/SettingsRulesTab';
 import SettingsAboutTab from './settings/SettingsAboutTab';
 import SettingsDataTab from './settings/SettingsDataTab';
@@ -93,15 +106,15 @@ const OPEN_MODE_OPTIONS: { value: AppSettings['openArticleMode']; label: string 
 
 export default function SettingsModal({ settings, onSettingsChange, onClose, onSourcesChanged, onAddSource, sources, folders }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>('general');
-  const [theme, setTheme] = useState<Theme>('system');
+  const [theme, setTheme] = useState<Theme>(() => {
+    // 用 AppSettings.appTheme 初始化，避免弹窗内状态与全局不一致
+    return (settings.appTheme === 'light' || settings.appTheme === 'dark') ? settings.appTheme : 'system';
+  });
   const [sourceFilter, setSourceFilter] = useState<'all' | 'ok' | 'bad'>('all');
   const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
   const [isChecking, setIsChecking] = useState(false);
   const [checkingIds, setCheckingIds] = useState<Set<number>>(new Set());
-  const [editingSourceId, setEditingSourceId] = useState<number | null>(null);
-  const [editingName, setEditingName] = useState('');
-  const [editingUrl, setEditingUrl] = useState('');
-  const editNameRef = useRef<HTMLInputElement>(null);
+  const [editTarget, setEditTarget] = useState<Source | null>(null);
   const [rules, setRules] = useState<FilterRule[]>([]);
   const [ruleForm, setRuleForm] = useState<RuleFormState>({
     name: '',
@@ -113,13 +126,18 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     enabled: true,
   });
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'sources' | 'rule'; id?: number } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'sources' | 'rule' | 'source'; id?: number } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('theme');
-    if (saved === 'light' || saved === 'dark') setTheme(saved);
-    else setTheme('system');
+    // 隐私模式下访问 localStorage 可能抛错，读失败时回退到跟随系统
+    try {
+      const saved = localStorage.getItem('theme');
+      setTheme(saved === 'light' || saved === 'dark' ? saved : 'system');
+    } catch (err) {
+      console.error('Failed to read theme from localStorage:', err);
+      setTheme('system');
+    }
   }, []);
 
   useEffect(() => { fetchRules(); }, []);
@@ -134,11 +152,10 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
 
   const fetchRules = async () => {
     try {
-      const res = await fetch(`${getApi()}/filter-rules`);
-      if (!res.ok) throw new Error('获取失败');
-      const data = (await res.json()) as FilterRule[];
+      const data = await listFilterRules();
       setRules(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (err) {
+      console.error('Failed to fetch filter rules:', err);
       showToast('获取过滤规则失败');
     }
   };
@@ -149,13 +166,20 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
 
   const applyTheme = (value: Theme) => {
     setTheme(value);
+    // 主题持久化失败不应阻断当前会话的视觉切换
+    try {
+      if (value === 'system') localStorage.removeItem('theme');
+      else localStorage.setItem('theme', value);
+    } catch (err) {
+      console.error('Failed to persist theme to localStorage:', err);
+    }
     if (value === 'system') {
-      localStorage.removeItem('theme');
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+      updateSetting('appTheme', 'system');
     } else {
-      localStorage.setItem('theme', value);
       document.documentElement.setAttribute('data-theme', value);
+      updateSetting('appTheme', value);
     }
   };
 
@@ -188,22 +212,25 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     setDeleteConfirm({ type: 'sources' });
   };
 
+  const deleteSingleSource = (source: Source) => {
+    setDeleteConfirm({ type: 'source', id: source.id });
+  };
+
   const confirmDeleteSources = async () => {
-    if (deleteConfirm?.type !== 'sources') return;
-    const ids = [...selectedSourceIds];
+    if (deleteConfirm?.type !== 'sources' && deleteConfirm?.type !== 'source') return;
+    const ids =
+      deleteConfirm.type === 'source' && deleteConfirm.id != null
+        ? [deleteConfirm.id]
+        : [...selectedSourceIds];
     setDeleteConfirm(null);
     if (ids.length === 0) return;
     try {
-      const res = await fetch(`${getApi()}/sources/delete-batch`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
-      });
-      if (!res.ok) throw new Error('删除失败');
+      await deleteSourcesBatch(ids);
       setSelectedSourceIds([]);
       onSourcesChanged?.();
       showToast('已删除订阅源');
-    } catch {
+    } catch (err) {
+      console.error('Failed to delete sources:', err);
       showToast('删除失败');
     }
   };
@@ -223,15 +250,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     if (ids.length === 0) return;
 
     const results = await Promise.allSettled(
-      ids.map((id) =>
-        fetch(`${getApi()}/sources/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hideInTimeline: true }),
-        }).then((res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        })
-      )
+      ids.map((id) => updateSource(id, { hideInTimeline: true }))
     );
 
     const succeededResults = results.filter((r) => r.status === 'fulfilled');
@@ -241,34 +260,39 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     notifyHideResult(results.length - succeededCount, ids.length);
   };
 
-  const startRename = (source: Source) => {
-    setEditingSourceId(source.id);
-    setEditingName(source.name);
-    setEditingUrl(source.url);
-  };
-
-  const clearRenameState = () => {
-    setEditingSourceId(null);
-    setEditingName('');
-    setEditingUrl('');
-  };
-
-  const confirmRename = async () => {
-    if (editingSourceId == null || !editingName.trim() || !editingUrl.trim()) return;
-    const trimmedName = editingName.trim();
-    const trimmedUrl = editingUrl.trim();
+  const toggleHideSource = async (source: Source) => {
     try {
-      const res = await fetch(`${getApi()}/sources/${editingSourceId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmedName, url: trimmedUrl }),
+      await updateSource(source.id, { hideInTimeline: !source.hideInTimeline });
+      onSourcesChanged?.();
+      showToast(source.hideInTimeline ? '已在全部文章显示' : '已在全部文章隐藏');
+    } catch (err) {
+      console.error('Failed to toggle hide source:', err);
+      showToast('操作失败');
+    }
+  };
+
+  const saveSourceEdit = async (params: {
+    sourceId: number;
+    name: string;
+    url: string;
+    folderId: number | null;
+    isPrivate: boolean;
+    hideInTimeline: boolean;
+  }) => {
+    try {
+      await updateSource(params.sourceId, {
+        name: params.name.trim(),
+        url: params.url.trim(),
+        folderId: params.folderId,
+        isPrivate: params.isPrivate,
+        hideInTimeline: params.hideInTimeline,
       });
-      if (!res.ok) throw new Error('保存失败');
-      clearRenameState();
+      setEditTarget(null);
       onSourcesChanged?.();
       showToast('订阅源已更新');
-    } catch {
-      showToast('保存失败');
+    } catch (err) {
+      console.error('Failed to edit source:', err);
+      showToast('编辑订阅源失败');
     }
   };
 
@@ -287,26 +311,24 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     setCheckingIds(new Set(ids));
 
     const queue = [...ids];
-    const checkOne = (id: number) =>
-      fetch(`${getApi()}/sources/${id}/fetch`, { method: 'POST' })
-        .then(() => {
-          setCheckingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-        })
-        .catch(() => {
-          setCheckingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
+    // 单源检测失败不中断整体流程，失败计数由后端记录并在列表中呈现
+    const checkOne = async (id: number) => {
+      try {
+        await triggerFetch({ sourceId: id });
+      } catch (err) {
+        console.error(`Failed to check source ${id}:`, err);
+      } finally {
+        setCheckingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
         });
+      }
+    };
 
     const checkBatch = async () => {
-      while (queue.length > 0) {
-        await checkOne(queue.shift()!);
+      for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+        await checkOne(id);
       }
     };
 
@@ -322,16 +344,12 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
   const importOPML = async (fileOrXml: File | string) => {
     try {
       const text = typeof fileOrXml === 'string' ? fileOrXml : await fileOrXml.text();
-      const res = await fetch(`${getApi()}/opml/import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/xml' },
-        body: text,
-      });
-      if (!res.ok) throw new Error('导入失败');
+      await importOPMLApi(text);
       showToast('OPML 导入成功');
       onSourcesChanged?.();
-    } catch {
-      showToast('OPML 导入失败');
+    } catch (err) {
+      console.error('Failed to import OPML:', err);
+      showToast(err instanceof Error && err.message ? `OPML 导入失败：${err.message}` : 'OPML 导入失败');
     }
   };
 
@@ -343,22 +361,18 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
         return;
       }
       await downloadBlob('/opml/export', 'subscriptions.opml');
-    } catch {
+    } catch (err) {
+      console.error('Failed to export OPML:', err);
       showToast('导出失败');
     }
   };
 
   const importDatabase = async (file: File) => {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch(`${getApi()}/database/restore`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) throw new Error('恢复失败');
+      await restoreDatabase(file);
       showToast('数据库恢复成功，请重启应用');
-    } catch {
+    } catch (err) {
+      console.error('Failed to restore database:', err);
       showToast('数据库恢复失败');
     }
   };
@@ -370,8 +384,9 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
         await app.SaveDatabaseFile();
         return;
       }
-      window.location.href = `${getApi()}/database/export`;
-    } catch {
+      window.location.href = getDatabaseExportUrl();
+    } catch (err) {
+      console.error('Failed to export database:', err);
       showToast('导出失败');
     }
   };
@@ -385,7 +400,8 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     try {
       await app.RestartApp();
       showToast('正在重启应用...');
-    } catch {
+    } catch (err) {
+      console.error('Failed to restart app:', err);
       showToast('重启失败');
     }
   };
@@ -445,21 +461,13 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     if (conditions == null) return;
 
     const body = buildRulePayload(ruleForm.name.trim(), conditions);
-    const url = editingRuleId
-      ? `${getApi()}/filter-rules/${editingRuleId}`
-      : `${getApi()}/filter-rules`;
-
     try {
-      const res = await fetch(url, {
-        method: editingRuleId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error('保存失败');
+      await saveFilterRule(editingRuleId, body);
       await fetchRules();
       resetRuleForm();
       showToast('规则已保存');
-    } catch {
+    } catch (err) {
+      console.error('Failed to save filter rule:', err);
       showToast('保存失败');
     }
   };
@@ -476,15 +484,11 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       action: rule.action,
     };
     try {
-      const res = await fetch(`${getApi()}/filter-rules/${rule.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error('更新失败');
+      await saveFilterRule(rule.id, body);
       await fetchRules();
       showToast('状态已更新');
-    } catch {
+    } catch (err) {
+      console.error('Failed to toggle filter rule:', err);
       showToast('更新失败');
     }
   };
@@ -498,11 +502,11 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     const id = deleteConfirm.id;
     setDeleteConfirm(null);
     try {
-      const res = await fetch(`${getApi()}/filter-rules/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('删除失败');
+      await deleteFilterRule(id);
       await fetchRules();
       showToast('规则已删除');
-    } catch {
+    } catch (err) {
+      console.error('Failed to delete filter rule:', err);
       showToast('删除失败');
     }
   };
@@ -511,7 +515,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     switch (activeTab) {
       case 'general':
         return (
-          <div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <Section title="时间线行为">
               <Row
                 title="启动时仅显示未读"
@@ -692,7 +696,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
 
       case 'appearance':
         return (
-          <div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <Section title="主题">
               <Row
                 title="主题"
@@ -824,30 +828,25 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       case 'sources':
         return (
           <SettingsSourcesTab
-            sources={sources}
+            folders={folders}
             filteredSources={filteredSources}
             selectedSourceIds={selectedSourceIds}
             isChecking={isChecking}
             checkingIds={checkingIds}
-            editingSourceId={editingSourceId}
-            editingName={editingName}
-            editingUrl={editingUrl}
             sourceFilter={sourceFilter}
             onSourcesChanged={onSourcesChanged}
             onAddSource={onAddSource}
             onToggleSelection={toggleSourceSelection}
             onToggleSelectAll={toggleSelectAll}
             onDeleteSources={deleteSelectedSources}
+            onDeleteSource={deleteSingleSource}
             onHideSelected={hideSelectedSources}
-            onStartRename={startRename}
-            onConfirmRename={confirmRename}
-            onCancelRename={clearRenameState}
+            onHideSource={toggleHideSource}
+            onEditSource={(s) => setEditTarget(s)}
             onCheckAvailability={checkAvailability}
             onImportOPML={importOPML}
             onExportOPML={exportOPML}
             onSourceFilterChange={(v) => { setSourceFilter(v); setSelectedSourceIds([]); }}
-            onEditingNameChange={setEditingName}
-            onEditingUrlChange={setEditingUrl}
           />
         );
 
@@ -874,8 +873,6 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
           <SettingsDataTab
             settings={settings}
             updateSetting={updateSetting}
-            importDatabase={importDatabase}
-            exportDatabase={exportDatabase}
             onRestartApp={restartApp}
           />
         );
@@ -945,7 +942,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
                 <X size={18} />
               </button>
             </div>
-            <div ref={contentRef} className="flex-1 overflow-y-auto px-6 py-5">
+            <div ref={contentRef} className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 py-5">
               {renderTab()}
             </div>
           </div>
@@ -958,6 +955,24 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
           danger
           onConfirm={confirmDeleteSources}
           onCancel={() => setDeleteConfirm(null)}
+        />
+      )}
+
+      {deleteConfirm?.type === 'source' && (
+        <ConfirmDialog
+          message="确定要取消订阅该订阅源吗？"
+          danger
+          onConfirm={confirmDeleteSources}
+          onCancel={() => setDeleteConfirm(null)}
+        />
+      )}
+
+      {editTarget && (
+        <EditSourceModal
+          source={editTarget}
+          folders={folders}
+          onClose={() => setEditTarget(null)}
+          onSubmit={saveSourceEdit}
         />
       )}
 

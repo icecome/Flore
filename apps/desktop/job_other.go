@@ -37,6 +37,6 @@ func waitForProcessExit(pid int, timeout time.Duration) {
 		if err := p.Signal(syscall.Signal(0)); err != nil {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 }

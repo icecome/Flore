@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { cn } from '../lib/cn';
 import { sourceColorAuto } from '../utils/sourceColor';
-import { loadSettings } from '../utils/settings';
+import { getCachedSettings } from '../utils/settings';
+import { getFaviconProxyBase } from '../utils/api';
 
 interface Props {
   name: string;
@@ -22,9 +23,8 @@ function getDomain(url?: string): string | null {
 
 function SourceAvatarBase({ name, url, color, size = 20, className }: Props) {
   const [imgError, setImgError] = useState(false);
-  // 缓存 loadOnlineAvatar 到 state，避免每次渲染都读 localStorage
-  // 挂载时读取一次即可，设置变更会在应用整体重新渲染时通过重新挂载生效
-  const [allowOnline] = useState(() => loadSettings().loadOnlineAvatar);
+  // 读取带缓存的设置，避免列表中每个头像挂载都重新 JSON.parse localStorage
+  const [allowOnline] = useState(() => getCachedSettings().loadOnlineAvatar);
   // url 变化时重置 imgError，避免切换源后仍显示字母头像
   useEffect(() => {
     setImgError(false);
@@ -43,7 +43,7 @@ function SourceAvatarBase({ name, url, color, size = 20, className }: Props) {
         title={name}
       >
         <img
-          src={`https://icons.duckduckgo.com/ip3/${domain}.ico`}
+          src={`${getFaviconProxyBase()}?domain=${encodeURIComponent(domain)}`}
           alt=""
           width={size}
           height={size}

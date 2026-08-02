@@ -17,8 +17,10 @@ export default class ErrorBoundary extends Component<Props, State> {
     this.state = { hasError: false, error: null, resetKey: 0 };
   }
 
-  static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error, resetKey: 0 };
+  // 只更新错误相关字段：resetKey 必须保留，否则再次出错会把重置计数清零，
+  // 导致下一次"重置应用"生成重复的 key、子树无法真正重新挂载
+  static getDerivedStateFromError(error: Error): Pick<State, 'hasError' | 'error'> {
+    return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {

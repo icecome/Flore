@@ -1,4 +1,4 @@
-import { getApi, getDesktopApp } from './api';
+import { getDesktopApp, getServerSettings, putServerSettings } from './api';
 
 export type ReaderTheme = 'system' | 'paper' | 'sepia' | 'green';
 
@@ -125,6 +125,7 @@ export interface AppSettings {
   listDateFormat: ListDateFormat;
 
   // === 外观 ===
+  appTheme: 'light' | 'dark' | 'system';
   readerTheme: ReaderTheme;
   readerFontSize: number;
   readerLineHeight: number;
@@ -192,6 +193,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   listDateFormat: 'relative',
 
   // 外观
+  appTheme: 'system',
   readerTheme: 'system',
   readerFontSize: 19,
   readerLineHeight: 1.8,
@@ -304,22 +306,39 @@ export function loadSettings(): AppSettings {
   }
 }
 
+// loadSettings 的进程内缓存：列表中大量组件挂载时会反复读取同一份设置，
+// 每次都 JSON.parse localStorage 代价过高。saveSettings 与跨标签页 storage 事件会刷新缓存。
+let _cachedSettings: AppSettings | null = null;
+
+/** 读取设置（带缓存），适用于高频挂载的展示型组件 */
+export function getCachedSettings(): AppSettings {
+  if (!_cachedSettings) _cachedSettings = loadSettings();
+  return _cachedSettings;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORAGE_KEY || e.key === null) _cachedSettings = null;
+  });
+}
+
 // 从后端数据库异步加载设置（启动后合并到 state，实现跨设备同步）
 // 后端返回空对象时返回 null，由调用方决定是否触发迁移
 export async function loadSettingsFromServer(): Promise<AppSettings | null> {
   try {
-    const res = await fetch(`${getApi()}/settings`);
-    if (!res.ok) return null;
-    const raw = (await res.json()) as Record<string, string>;
+    const raw = await getServerSettings();
     if (!raw || Object.keys(raw).length === 0) return null;
     return parseServerSettings(raw);
-  } catch {
+  } catch (err) {
+    // 后端不可用时回退到本地设置，属预期路径，不打扰用户
+    console.error('Failed to load settings from server:', err);
     return null;
   }
 }
 
 // 枚举字段合法值集合，用于校验从 localStorage/后端加载的值
 const ENUM_VALIDATORS: Partial<Record<keyof AppSettings, readonly string[]>> = {
+  appTheme: ['light', 'dark', 'system'],
   markReadMode: ['none', 'scroll', 'hover', 'view'],
   listDensity: ['compact', 'normal', 'comfortable'],
   listSortOrder: ['newest', 'oldest'],
@@ -373,10 +392,12 @@ function serializeSettings(settings: AppSettings): Record<string, string> {
 // 保存设置：同步写入 localStorage（UI 不阻塞），异步上传后端
 // 保留同步签名以兼容现有调用方；后端写入失败不影响本地体验
 export function saveSettings(settings: AppSettings): void {
+  _cachedSettings = settings;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    // ignore
+  } catch (err) {
+    // 隐私模式或配额耗尽时写入会抛错，此时仅依赖后端持久化
+    console.error('Failed to persist settings to localStorage:', err);
   }
   void saveSettingsToServer(settings);
 }
@@ -384,19 +405,16 @@ export function saveSettings(settings: AppSettings): void {
 // 异步写入后端数据库
 export async function saveSettingsToServer(settings: AppSettings): Promise<void> {
   try {
-    await fetch(`${getApi()}/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(serializeSettings(settings)),
-    });
-  } catch {
+    await putServerSettings(serializeSettings(settings));
+  } catch (err) {
     // 网络失败静默，本地 localStorage 已是最新
+    console.error('Failed to save settings to server:', err);
   }
   // 通知桌面壳刷新窗口行为设置缓存（closeBehavior/minimizeBehavior）
   try {
     getDesktopApp()?.RefreshWindowSettings?.();
-  } catch {
-    // 桌面端调用失败忽略
+  } catch (err) {
+    console.error('Failed to refresh desktop window settings:', err);
   }
 }
 
@@ -504,78 +522,103 @@ export function applyAccentColor(color: string): void {
   _rafId = requestAnimationFrame(tickAccentColor);
 }
 
+/** 导入配置文件的顶层结构 */
+interface ExportedConfig {
+  settings?: Record<string, unknown>;
+  theme?: string;
+  serverSettings?: Record<string, string>;
+}
+
 /** 从选中的 JSON 文件中读取并导入配置 */
 async function applyImportedConfig(file: File): Promise<boolean> {
   try {
     const text = await file.text();
-    const config = JSON.parse(text);
-    if (config.settings) {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== 'object' || parsed === null) return false;
+    const config = parsed as ExportedConfig;
+    if (config.settings && typeof config.settings === 'object') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(config.settings));
     }
-    if (config.theme) {
+    if (typeof config.theme === 'string') {
       localStorage.setItem('theme', config.theme);
     }
     // 后端设置（备份策略、留存策略、代理等）一并写回，确保配置备份可完整迁移（M-A1）
     if (config.serverSettings && typeof config.serverSettings === 'object') {
       try {
-        await fetch(`${getApi()}/settings`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(config.serverSettings),
-        });
-      } catch {
+        await putServerSettings(config.serverSettings);
+      } catch (err) {
         // 后端写入失败忽略，前端配置已落地
+        console.error('Failed to import server settings:', err);
       }
     }
     return true;
-  } catch {
+  } catch (err) {
+    console.error('Failed to import config file:', err);
     return false;
   }
 }
 
+/** 窗口重新获得焦点后，等待 change 事件的宽限期 */
+const FILE_PICK_GRACE_MS = 800;
+/** 用户长时间未操作时释放 Promise，避免调用方永久挂起 */
+const FILE_PICK_TIMEOUT_MS = 120000;
+
+/**
+ * 弹出文件选择框导入配置。
+ * 注意：窗口 focus 事件早于 input 的 change 事件触发，
+ * 若在 focus 时立即以「取消」结算 Promise，用户真实选择的文件会被静默丢弃。
+ * 因此 focus 只启动宽限计时，超时且确实没有选中文件才判定为取消。
+ */
 export function importConfig(): Promise<boolean> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
+    input.style.display = 'none';
 
-    let resolved = false;
-    const cleanup = () => {
-      input.remove();
-      window.removeEventListener('focus', onFocus);
+    let settled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    let guardTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearTimers = () => {
+      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+      if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
     };
+
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      window.removeEventListener('focus', onFocus);
+      input.remove();
+      resolve(result);
+    };
+
     const onFocus = () => {
-      if (!resolved) {
-        resolved = true;
-        cleanup();
-        resolve(false);
+      if (graceTimer) clearTimeout(graceTimer);
+      graceTimer = setTimeout(() => {
+        if (!input.files || input.files.length === 0) finish(false);
+      }, FILE_PICK_GRACE_MS);
+    };
+
+    // 现代浏览器在用户点「取消」时会派发 cancel 事件，可立即结算
+    input.addEventListener('cancel', () => finish(false));
+
+    input.onchange = async () => {
+      // 已选中文件：先停掉取消判定，再执行异步导入，避免宽限期内被误判
+      clearTimers();
+      window.removeEventListener('focus', onFocus);
+      const file = input.files?.[0];
+      if (!file) {
+        finish(false);
+        return;
       }
+      finish(await applyImportedConfig(file));
     };
 
     document.body.appendChild(input);
     window.addEventListener('focus', onFocus);
-
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) {
-        resolved = true;
-        cleanup();
-        resolve(false);
-        return;
-      }
-      resolved = true;
-      cleanup();
-      resolve(await applyImportedConfig(file));
-    };
-
-    setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        cleanup();
-        resolve(false);
-      }
-    }, 10000);
-
+    guardTimer = setTimeout(() => finish(false), FILE_PICK_TIMEOUT_MS);
     input.click();
   });
 }

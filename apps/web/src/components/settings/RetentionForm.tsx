@@ -1,5 +1,5 @@
 import { Trash2 } from '../icons';
-import { Toggle } from './SettingsShared';
+import { Toggle, NumberInput } from './SettingsShared';
 import type { AppSettings } from '../../utils/settings';
 
 interface Props {
@@ -21,16 +21,14 @@ export default function RetentionForm({ settings, updateSetting, cleaning, onCle
             <span className="text-[13px] text-primary">已读文章保留天数</span>
             <span className="mt-0.5 text-[12px] leading-snug text-muted">0 表示不限制，永久保留</span>
           </div>
-          <div className="ml-4 shrink-0 flex items-center gap-2">
-            <input
-              type="number"
+          <div className="ml-4 shrink-0">
+            <NumberInput
+              value={settings.articleRetentionDays}
               min={0}
               max={3650}
-              value={settings.articleRetentionDays}
-              onChange={(e) => updateSetting('articleRetentionDays', Number(e.target.value))}
-              className="w-[72px] px-2 py-1 text-[13px] border border-border rounded-md bg-bg-input text-primary text-center outline-none focus:border-primary"
+              unit="天"
+              onChange={(v) => updateSetting('articleRetentionDays', v)}
             />
-            <span className="text-[12px] text-muted">天</span>
           </div>
         </div>
 
@@ -40,17 +38,15 @@ export default function RetentionForm({ settings, updateSetting, cleaning, onCle
             <span className="text-[13px] text-primary">已读文章最大数量</span>
             <span className="mt-0.5 text-[12px] leading-snug text-muted">0 表示不限制，超过保留最新的</span>
           </div>
-          <div className="ml-4 shrink-0 flex items-center gap-2">
-            <input
-              type="number"
+          <div className="ml-4 shrink-0">
+            <NumberInput
+              value={settings.articleRetentionMax}
               min={0}
               max={100000}
               step={100}
-              value={settings.articleRetentionMax}
-              onChange={(e) => updateSetting('articleRetentionMax', Number(e.target.value))}
-              className="w-[72px] px-2 py-1 text-[13px] border border-border rounded-md bg-bg-input text-primary text-center outline-none focus:border-primary"
+              unit="篇"
+              onChange={(v) => updateSetting('articleRetentionMax', v)}
             />
-            <span className="text-[12px] text-muted">篇</span>
           </div>
         </div>
 

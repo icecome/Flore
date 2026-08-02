@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/idna"
@@ -21,7 +22,53 @@ var allowedSchemes = map[string]bool{
 	"https": true,
 }
 
-// blockedDomains 禁止访问的域名列表（云元数据端点等）
+// dnsCache 缓存域名到 IP 的解析结果，TTL 60 秒。
+// 避免每次抓取都同步阻塞 DNS 解析，同时保留安全检查（每次仍会验证 IP 是否私有）。
+var (
+	dnsCache    = make(map[string]cachedDNS)
+	dnsCacheMu  sync.RWMutex
+	dnsCacheTTL = 60 * time.Second
+)
+
+type cachedDNS struct {
+	ips      []string
+	cachedAt time.Time
+}
+
+// lookupHostWithCache 带缓存的 DNS 解析，TTL 内命中缓存，之后刷新。
+// 仍会校验每个 IP 是否私有（防 DNS rebinding）。
+func lookupHostWithCache(ctx context.Context, host string) ([]string, error) {
+	dnsCacheMu.RLock()
+	entry, ok := dnsCache[host]
+	dnsCacheMu.RUnlock()
+
+	if ok && time.Since(entry.cachedAt) < dnsCacheTTL {
+		// 缓存命中，仍需验证 IP（防 DNS rebinding）
+		for _, a := range entry.ips {
+			if isPrivateIP(a) {
+				return nil, fmt.Errorf("blocked connection: %s resolves to private IP %s", host, a)
+			}
+		}
+		return entry.ips, nil
+	}
+
+	// 缓存未命中或过期，重新解析
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
+	}
+	for _, a := range addrs {
+		if isPrivateIP(a) {
+			return nil, fmt.Errorf("blocked connection: %s resolves to private IP %s", host, a)
+		}
+	}
+
+	dnsCacheMu.Lock()
+	dnsCache[host] = cachedDNS{ips: addrs, cachedAt: time.Now()}
+	dnsCacheMu.Unlock()
+	return addrs, nil
+}
+
 var blockedDomains = []string{
 	"metadata.google.internal",
 	"metadata.azure.com",
@@ -171,16 +218,9 @@ func TransportWithSSRFProtection() *http.Transport {
 				return nil, fmt.Errorf("blocked connection to private IP %s", host)
 			}
 
-			// 域名需要再次解析并检查所有解析结果，防止 DNS rebinding
-			// 复用请求 ctx 的 deadline，未单独设置解析超时
-			addrs, err := net.DefaultResolver.LookupHost(ctx, host)
-			if err != nil {
-				return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
-			}
-			for _, a := range addrs {
-				if isPrivateIP(a) {
-					return nil, fmt.Errorf("blocked connection: %s resolves to private IP %s", host, a)
-				}
+			// 使用缓存 DNS 解析，TTL 内命中缓存，之后刷新（保留安全检查）
+			if _, err := lookupHostWithCache(ctx, host); err != nil {
+				return nil, err
 			}
 
 			return (&net.Dialer{
@@ -188,8 +228,8 @@ func TransportWithSSRFProtection() *http.Transport {
 				KeepAlive: 30 * time.Second,
 			}).DialContext(ctx, network, addr)
 		},
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     120 * time.Second,
 	}
 }

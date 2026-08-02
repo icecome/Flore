@@ -82,15 +82,8 @@ export function useBackups(): UseBackupsResult {
   const removeMany = useCallback(async (names: string[]) => {
     if (names.length === 0) return;
     setBusy('delete');
-    let failed = 0;
-    for (const name of names) {
-      try {
-        await deleteBackup(name);
-      } catch (err) {
-        failed += 1;
-        console.error('Delete backup error:', err);
-      }
-    }
+    const results = await Promise.allSettled(names.map((name) => deleteBackup(name)));
+    const failed = results.filter((r) => r.status === 'rejected').length;
     const succeeded = names.length - failed;
     if (failed === 0) showToast(`${succeeded} 个备份已删除`);
     else if (succeeded === 0) showToast('删除失败');

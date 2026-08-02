@@ -401,5 +401,3 @@ func (s *ReaderService) TestFilterRule(id int) ([]models.ItemWithSource, error) 
 	}
 	return matched, nil
 }
-
-

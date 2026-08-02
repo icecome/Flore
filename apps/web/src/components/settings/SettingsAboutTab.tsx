@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getApi } from '../../utils/api';
+import { getVersion } from '../../utils/api';
 import { Section } from './SettingsShared';
 
 export default function SettingsAboutTab() {
@@ -7,15 +7,18 @@ export default function SettingsAboutTab() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${getApi()}/version`)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
+    // 版本号获取失败仅降级展示"未知"，不打扰用户
+    getVersion()
       .then((data) => { if (!cancelled) setVersion(data.version || '未知'); })
-      .catch(() => { if (!cancelled) setVersion('未知'); });
+      .catch((err) => {
+        console.error('Failed to fetch version:', err);
+        if (!cancelled) setVersion('未知');
+      });
     return () => { cancelled = true; };
   }, []);
 
   return (
-    <div>
+    <div className="min-h-0 flex-1 overflow-y-auto">
       <Section title="版本">
         <div className="flex items-center justify-between">
           <span className="text-[15px] font-medium text-primary">Flore v{version}</span>

@@ -28,6 +28,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # T1：格式门禁。gofmt 不需要依赖，可对全部 Go 模块（含仅能在 Windows 构建的桌面壳）统一检查。
+      - name: Go format check
+        run: |
+          unformatted=$(gofmt -l server/go apps/desktop)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt，请运行 gofmt -w ："
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Go vet
         run: cd server/go && go vet ./...
 

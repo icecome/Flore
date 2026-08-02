@@ -8,7 +8,7 @@ interface Props {
 
 export default function SettingsNetworkTab({ settings, updateSetting }: Props) {
   return (
-    <div>
+    <div className="min-h-0 flex-1 overflow-y-auto">
       <Section title="抓取设置">
         <Row
           title="抓取超时"
@@ -71,7 +71,7 @@ export default function SettingsNetworkTab({ settings, updateSetting }: Props) {
       <Section title="隐私">
         <Row
           title="加载在线头像"
-          desc="从 DuckDuckGo 获取订阅源站点图标。关闭后使用字母头像，不向第三方泄露订阅域名。"
+          desc="通过后端代理的国内图标服务获取订阅源站点图标。关闭后使用字母头像，不向第三方直接泄露订阅域名。"
           control={
             <Toggle
               checked={settings.loadOnlineAvatar}

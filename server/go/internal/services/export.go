@@ -124,9 +124,9 @@ func (s *ReaderService) ItemToMarkdown(item models.ItemWithSource) string {
 	b.WriteString("---\n")
 	b.WriteString(fmt.Sprintf("title: \"%s\"\n", escapeYamlString(item.Title)))
 	b.WriteString(fmt.Sprintf("author: \"%s\"\n", escapeYamlString(author)))
-	b.WriteString(fmt.Sprintf("link: \"%s\"\n", item.Link))
+	b.WriteString(fmt.Sprintf("link: \"%s\"\n", escapeYamlString(item.Link)))
 	b.WriteString(fmt.Sprintf("source: \"%s\"\n", escapeYamlString(item.SourceName)))
-	b.WriteString(fmt.Sprintf("sourceUrl: \"%s\"\n", item.SourceURL))
+	b.WriteString(fmt.Sprintf("sourceUrl: \"%s\"\n", escapeYamlString(item.SourceURL)))
 	b.WriteString(fmt.Sprintf("pubDate: \"%s\"\n", pubDate))
 	b.WriteString(fmt.Sprintf("isRead: %t\n", item.IsRead))
 	b.WriteString(fmt.Sprintf("isStarred: %t\n", item.IsStarred))
@@ -263,5 +263,3 @@ func (s *ReaderService) ExportItemsJSON(items []models.ItemWithSource, w io.Writ
 	}
 	return nil
 }
-
-

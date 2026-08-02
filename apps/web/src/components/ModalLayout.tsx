@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useId, useRef } from 'react';
 import { X } from './icons';
 import { cn } from '../lib/cn';
 
@@ -77,10 +77,10 @@ function useFocusTrap(onClose: () => void) {
   return containerRef;
 }
 
-function ModalHeader({ title, titleIcon, onClose }: { title?: React.ReactNode; titleIcon?: React.ReactNode; onClose: () => void }) {
+function ModalHeader({ titleId, title, titleIcon, onClose }: { titleId: string; title?: React.ReactNode; titleIcon?: React.ReactNode; onClose: () => void }) {
   return (
     <div className="flex min-h-[52px] shrink-0 items-center justify-between border-b border-border px-4 py-3">
-      <h3 className="m-0 flex items-center gap-2 text-[15px] font-semibold text-primary">
+      <h3 id={titleId} className="m-0 flex items-center gap-2 text-[15px] font-semibold text-primary">
         {titleIcon && <span className="inline-flex text-secondary">{titleIcon}</span>}
         {title}
       </h3>
@@ -107,6 +107,9 @@ export default function ModalLayout({
   closeOnBackdrop = true,
 }: Props) {
   const containerRef = useFocusTrap(onClose);
+  const titleId = useId();
+  // 无标题栏时无可关联的标题元素，退化为不声明 aria-labelledby，避免指向空节点
+  const labelledBy = showHeader && title != null ? titleId : undefined;
 
   const handleBackdrop = useCallback((e: React.MouseEvent) => {
     if (!closeOnBackdrop) return;
@@ -119,6 +122,7 @@ export default function ModalLayout({
       onClick={handleBackdrop}
       role="dialog"
       aria-modal="true"
+      aria-labelledby={labelledBy}
     >
       <div
         ref={containerRef}
@@ -129,7 +133,7 @@ export default function ModalLayout({
         style={{ maxWidth: width }}
         onClick={(e) => e.stopPropagation()}
       >
-        {showHeader && <ModalHeader title={title} titleIcon={titleIcon} onClose={onClose} />}
+        {showHeader && <ModalHeader titleId={titleId} title={title} titleIcon={titleIcon} onClose={onClose} />}
         {children}
       </div>
     </div>

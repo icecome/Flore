@@ -14,6 +14,18 @@ export namespace main {
 	        this.goBaseURL = source["goBaseURL"];
 	    }
 	}
+	export class WindowState {
+	    maximised: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new WindowState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.maximised = source["maximised"];
+	    }
+	}
 
 }
 

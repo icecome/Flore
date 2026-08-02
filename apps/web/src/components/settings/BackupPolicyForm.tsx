@@ -1,5 +1,5 @@
 import { Trash2 } from '../icons';
-import { Toggle } from './SettingsShared';
+import { Toggle, NumberInput } from './SettingsShared';
 import type { AppSettings } from '../../utils/settings';
 
 const BACKUP_INTERVAL_OPTIONS = [
@@ -62,16 +62,14 @@ export default function BackupPolicyForm({ settings, updateSetting, cleaning, on
             <span className="text-[13px] text-primary">最大保留数量</span>
             <span className="mt-0.5 text-[12px] leading-snug text-muted">超过此数量的旧备份将被自动清理</span>
           </div>
-          <div className="ml-4 shrink-0 flex items-center gap-2">
-            <input
-              type="number"
+          <div className="ml-4 shrink-0">
+            <NumberInput
+              value={settings.backupMaxKeep}
               min={1}
               max={100}
-              value={settings.backupMaxKeep}
-              onChange={(e) => updateSetting('backupMaxKeep', Number(e.target.value))}
-              className="w-[72px] px-2 py-1 text-[13px] border border-border rounded-md bg-bg-input text-primary text-center outline-none focus:border-primary"
+              unit="个"
+              onChange={(v) => updateSetting('backupMaxKeep', v)}
             />
-            <span className="text-[12px] text-muted">个</span>
           </div>
         </div>
 
@@ -81,16 +79,14 @@ export default function BackupPolicyForm({ settings, updateSetting, cleaning, on
             <span className="text-[13px] text-primary">最大保留天数</span>
             <span className="mt-0.5 text-[12px] leading-snug text-muted">超过此天数的备份将被自动清理</span>
           </div>
-          <div className="ml-4 shrink-0 flex items-center gap-2">
-            <input
-              type="number"
+          <div className="ml-4 shrink-0">
+            <NumberInput
+              value={settings.backupMaxDays}
               min={1}
               max={365}
-              value={settings.backupMaxDays}
-              onChange={(e) => updateSetting('backupMaxDays', Number(e.target.value))}
-              className="w-[72px] px-2 py-1 text-[13px] border border-border rounded-md bg-bg-input text-primary text-center outline-none focus:border-primary"
+              unit="天"
+              onChange={(v) => updateSetting('backupMaxDays', v)}
             />
-            <span className="text-[12px] text-muted">天</span>
           </div>
         </div>
       </div>

@@ -1,35 +1,31 @@
-import { useRef, useEffect } from 'react';
+import { useRef } from 'react';
 import { RefreshCw, Plus, Upload, Download, EyeOff, Pencil, Trash2, Circle } from '../icons';
 import { cn } from '../../lib/cn';
-import type { Source } from '../../types';
-import { IconBtn } from './SettingsShared';
+import type { Source, Folder } from '../../types';
+import { SmallBtn, IconBtn } from './SettingsShared';
+import { getDesktopApp } from '../../utils/api';
 import { showToast } from '../../utils/toast';
 
 interface Props {
-  sources: Source[];
+  folders: Folder[];
   filteredSources: Source[];
   selectedSourceIds: number[];
   isChecking: boolean;
   checkingIds: Set<number>;
-  editingSourceId: number | null;
-  editingName: string;
-  editingUrl: string;
   sourceFilter: 'all' | 'ok' | 'bad';
   onSourcesChanged?: () => void;
   onAddSource?: () => void;
   onToggleSelection: (id: number) => void;
   onToggleSelectAll: () => void;
   onDeleteSources: () => void;
+  onDeleteSource: (source: Source) => void;
   onHideSelected: () => Promise<void>;
-  onStartRename: (source: Source) => void;
-  onConfirmRename: () => Promise<void>;
-  onCancelRename: () => void;
+  onHideSource: (source: Source) => void;
+  onEditSource: (source: Source) => void;
   onCheckAvailability: () => Promise<void>;
   onImportOPML: (fileOrXml: File | string) => Promise<void>;
   onExportOPML: () => Promise<void>;
   onSourceFilterChange: (filter: 'all' | 'ok' | 'bad') => void;
-  onEditingNameChange: (name: string) => void;
-  onEditingUrlChange: (url: string) => void;
 }
 
 const SOURCE_FILTER_OPTIONS: { value: 'all' | 'ok' | 'bad'; label: string }[] = [
@@ -40,58 +36,34 @@ const SOURCE_FILTER_OPTIONS: { value: 'all' | 'ok' | 'bad'; label: string }[] = 
 
 export default function SettingsSourcesTab(props: Props) {
   const {
-    sources,
+    folders,
     filteredSources,
     selectedSourceIds,
     isChecking,
     checkingIds,
-    editingSourceId,
-    editingName,
-    editingUrl,
     sourceFilter,
-    onSourcesChanged,
     onAddSource,
     onToggleSelection,
     onToggleSelectAll,
     onDeleteSources,
+    onDeleteSource,
     onHideSelected,
-    onStartRename,
-    onConfirmRename,
-    onCancelRename,
+    onHideSource,
+    onEditSource,
     onCheckAvailability,
     onImportOPML,
     onExportOPML,
     onSourceFilterChange,
-    onEditingNameChange,
-    onEditingUrlChange,
   } = props;
 
-  const editNameRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editingSourceId != null) editNameRef.current?.focus({ preventScroll: true });
-  }, [editingSourceId]);
-
+  const folderMap = new Map(folders.map((f) => [f.id, f.name]));
   const allSelected = filteredSources.length > 0 && selectedSourceIds.length === filteredSources.length;
 
   return (
-    <div className="relative flex h-full flex-col">
-      <div className="mb-5 flex items-center justify-end">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <button
-            onClick={onCheckAvailability}
-            disabled={isChecking}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] transition-colors',
-              'border border-border bg-surface text-secondary hover:border-border-strong hover:bg-hover disabled:opacity-40'
-            )}
-          >
-            <span className={isChecking ? 'inline-flex spin-fixed' : 'inline-flex'}>
-              <RefreshCw size={14} />
-            </span>
-            {isChecking ? '检测中...' : '检测可用性'}
-          </button>
           <select
             value={sourceFilter}
             onChange={(e) => {
@@ -105,8 +77,6 @@ export default function SettingsSourcesTab(props: Props) {
               </option>
             ))}
           </select>
-          <div className="mx-1 h-4 w-px bg-border" />
-          <IconBtn icon={<Plus size={16} />} title="添加订阅源" onClick={() => onAddSource?.()} />
           <input
             ref={fileInputRef}
             type="file"
@@ -122,7 +92,7 @@ export default function SettingsSourcesTab(props: Props) {
             icon={<Upload size={16} />}
             title="导入 OPML"
             onClick={() => {
-              const wailsApp = (window as unknown as { go?: { main?: { App?: { PickOPMLFile?: () => Promise<string> } } } }).go?.main?.App;
+              const wailsApp = getDesktopApp();
               if (wailsApp?.PickOPMLFile) {
                 wailsApp.PickOPMLFile().then((xml: string) => {
                   if (xml) onImportOPML(xml);
@@ -136,182 +106,140 @@ export default function SettingsSourcesTab(props: Props) {
             }}
           />
           <IconBtn icon={<Download size={16} />} title="导出 OPML" onClick={onExportOPML} />
+          <IconBtn icon={<Plus size={16} />} title="添加订阅源" onClick={() => onAddSource?.()} />
         </div>
+        <SmallBtn
+          icon={
+            <RefreshCw size={14} className={isChecking ? 'spin-fixed' : undefined} />
+          }
+          label={isChecking ? '检测中...' : '检测可用性'}
+          disabled={isChecking}
+          onClick={onCheckAvailability}
+        />
       </div>
 
       {filteredSources.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center text-muted">
-          <p className="text-[13px]">暂无订阅源</p>
+        <div className="flex h-[200px] flex-col items-center justify-center rounded-lg border border-border text-muted">
+          <p className="text-[13px]">暂无订阅源，点击添加订阅源开始使用</p>
         </div>
       ) : (
-        <div className="flex-1 overflow-hidden rounded-md border border-border">
-          <div className="h-full overflow-y-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-elevated text-left text-[12px] font-semibold text-muted">
-                  <th className="w-10 px-3 py-2.5 text-center align-middle">
+        <div className="overflow-hidden rounded-lg border border-border">
+          <div className="grid grid-cols-12 bg-elevated px-3 py-2.5 text-[11.5px] font-semibold text-muted">
+            <div className="col-span-1 flex items-center justify-center">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={onToggleSelectAll}
+                className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                aria-label="全选"
+              />
+            </div>
+            <div className="col-span-4">名称</div>
+            <div className="col-span-2">文件夹</div>
+            <div className="col-span-2">订阅日期</div>
+            <div className="col-span-1">状态</div>
+            <div className="col-span-2 text-right">操作</div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {filteredSources.map((source) => {
+              const neverFetched = source.lastFetchAt === null;
+              const bad = !neverFetched && source.fetchFailCount >= 3;
+              const selected = selectedSourceIds.includes(source.id);
+              const folderName = source.folderId != null ? folderMap.get(source.folderId) ?? '—' : '—';
+              return (
+                <div
+                  key={source.id}
+                  className={cn(
+                    'grid grid-cols-12 items-center border-t border-border-subtle px-3 py-2.5 text-[13px] transition-colors hover:bg-hover',
+                    selected && 'bg-primary-subtle'
+                  )}
+                >
+                  <div className="col-span-1 flex items-center justify-center">
                     <input
                       type="checkbox"
-                      checked={allSelected}
-                      onChange={onToggleSelectAll}
-                      className="h-3.5 w-3.5 cursor-pointer accent-primary align-middle"
+                      checked={selected}
+                      onChange={() => onToggleSelection(source.id)}
+                      className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                      aria-label={`选择 ${source.name}`}
                     />
-                  </th>
-                  <th className="px-3 py-2.5">名称</th>
-                  <th className="px-3 py-2.5">订阅日期</th>
-                  <th className="px-3 py-2.5 text-center">状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredSources.map((source) => {
-                  const neverFetched = source.lastFetchAt === null;
-                  const bad = !neverFetched && source.fetchFailCount >= 3;
-                  const selected = selectedSourceIds.includes(source.id);
-                  const editing = editingSourceId === source.id;
-                  return (
-                    <tr
-                      key={source.id}
-                      className={cn(
-                        'border-t border-border-subtle text-[13px] transition-colors hover:bg-hover',
-                        selected && 'bg-primary-subtle'
-                      )}
+                  </div>
+                  <div className="col-span-4 min-w-0">
+                    <div
+                      className={cn('truncate font-medium', bad ? 'text-danger' : 'text-primary')}
+                      title={source.name}
                     >
-                      <td className="px-3 py-2.5 text-center align-middle">
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={() => onToggleSelection(source.id)}
-                          className="h-3.5 w-3.5 cursor-pointer accent-primary align-middle"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        {editing ? (
-                          <div className="flex flex-col gap-1.5">
-                            <input
-                              ref={editNameRef}
-                              type="text"
-                              value={editingName}
-                              onChange={(e) => onEditingNameChange(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') onConfirmRename();
-                                if (e.key === 'Escape') onCancelRename();
-                              }}
-                              placeholder="订阅源名称"
-                              className="w-full rounded-md border border-border bg-surface px-2 py-1 text-[13px] text-primary outline-none focus:border-primary"
-                            />
-                            <input
-                              type="text"
-                              value={editingUrl}
-                              onChange={(e) => onEditingUrlChange(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') onConfirmRename();
-                                if (e.key === 'Escape') onCancelRename();
-                              }}
-                              placeholder="RSS 链接"
-                              className="w-full rounded-md border border-border bg-surface px-2 py-1 text-[12px] text-muted outline-none focus:border-primary"
-                            />
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={onConfirmRename}
-                                className="rounded-md bg-primary px-2.5 py-0.5 text-[11px] text-white hover:bg-primary-hover"
-                              >
-                                保存
-                              </button>
-                              <button
-                                type="button"
-                                onClick={onCancelRename}
-                                className="rounded-md px-2.5 py-0.5 text-[11px] text-muted hover:bg-hover"
-                              >
-                                取消
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <div
-                              className={cn('truncate font-medium', bad ? 'text-danger' : 'text-primary')}
-                              title={source.name}
-                            >
-                              {source.name}
-                            </div>
-                            <div className="truncate text-[11px] text-muted" title={source.url}>
-                              {source.url}
-                            </div>
-                          </>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-[12px] text-secondary">
-                        {source.createdAt ? new Date(source.createdAt).toLocaleDateString() : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        {checkingIds.has(source.id) ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-border/30 px-2 py-0.5 text-[11px] text-muted whitespace-nowrap">
-                            <RefreshCw size={10} className="spin-fixed" />
-                            检测中
-                          </span>
-                        ) : neverFetched ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-border/30 px-2 py-0.5 text-[11px] text-muted whitespace-nowrap">
-                            <Circle size={7} fill="currentColor" />
-                            未检测
-                          </span>
-                        ) : bad ? (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger whitespace-nowrap"
-                            title={
-                              source.lastError
-                                ? `失败 ${source.fetchFailCount} 次: ${source.lastError}`
-                                : `失败 ${source.fetchFailCount} 次`
-                            }
-                          >
-                            <Circle size={7} fill="currentColor" />
-                            超时
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success whitespace-nowrap">
-                            <Circle size={7} fill="currentColor" />
-                            正常
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      {source.name}
+                    </div>
+                    <div className="truncate text-[11px] text-muted" title={source.url}>
+                      {source.url}
+                    </div>
+                  </div>
+                  <div className="col-span-2 truncate text-[12px] text-secondary" title={folderName}>
+                    {folderName}
+                  </div>
+                  <div className="col-span-2 text-[12px] text-secondary">
+                    {source.createdAt ? new Date(source.createdAt).toLocaleDateString() : '-'}
+                  </div>
+                  <div className="col-span-1">
+                    {checkingIds.has(source.id) ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-border/30 px-2 py-0.5 text-[11px] text-muted whitespace-nowrap">
+                        <RefreshCw size={10} className="spin-fixed" />
+                        检测中
+                      </span>
+                    ) : neverFetched ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-border/30 px-2 py-0.5 text-[11px] text-muted whitespace-nowrap">
+                        <Circle size={7} fill="currentColor" />
+                        未检测
+                      </span>
+                    ) : bad ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger whitespace-nowrap"
+                        title={
+                          source.lastError
+                            ? `失败 ${source.fetchFailCount} 次: ${source.lastError}`
+                            : `失败 ${source.fetchFailCount} 次`
+                        }
+                      >
+                        <Circle size={7} fill="currentColor" />
+                        超时
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success whitespace-nowrap">
+                        <Circle size={7} fill="currentColor" />
+                        正常
+                      </span>
+                    )}
+                  </div>
+                  <div className="col-span-2 flex items-center justify-end gap-1">
+                    <IconBtn icon={<Pencil size={15} />} title="编辑" onClick={() => onEditSource(source)} />
+                    <IconBtn
+                      icon={<EyeOff size={15} />}
+                      title={source.hideInTimeline ? '在全部文章显示' : '在全部文章隐藏'}
+                      onClick={() => onHideSource(source)}
+                    />
+                    <IconBtn icon={<Trash2 size={15} />} title="取消订阅" danger onClick={() => onDeleteSource(source)} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-        <div className="flex items-center gap-1.5">
-          <IconBtn
-            icon={<EyeOff size={16} />}
-            title="在全部文章隐藏"
-            disabled={selectedSourceIds.length === 0}
-            onClick={onHideSelected}
-          />
-          <IconBtn
-            icon={<Pencil size={16} />}
-            title="修改名称/链接"
-            disabled={selectedSourceIds.length !== 1}
-            onClick={() => {
-              const s = sources.find((x) => x.id === selectedSourceIds[0]);
-              if (s) onStartRename(s);
-            }}
-          />
-          <IconBtn
-            icon={<Trash2 size={16} />}
-            title="取消订阅"
-            danger
-            disabled={selectedSourceIds.length === 0}
-            onClick={onDeleteSources}
-          />
-          {selectedSourceIds.length > 0 && (
+      {selectedSourceIds.length > 0 && (
+        <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
+          <div className="flex items-center gap-1.5">
+            <IconBtn icon={<EyeOff size={16} />} title="在全部文章隐藏" onClick={onHideSelected} />
+            <IconBtn
+              icon={<Trash2 size={16} />}
+              title="取消订阅"
+              danger
+              onClick={onDeleteSources}
+            />
             <span className="ml-2 text-[12px] text-muted">{selectedSourceIds.length} 项已选中</span>
-          )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

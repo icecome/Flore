@@ -2,7 +2,7 @@ import { Section, ShortcutRow } from './SettingsShared';
 
 export default function SettingsShortcutsTab() {
   return (
-    <div>
+    <div className="min-h-0 flex-1 overflow-y-auto">
       <Section title="文章导航">
         <ShortcutRow keys="↑ / ↓" desc="上下切换文章" />
         <ShortcutRow keys="Enter" desc="打开选中的文章" />

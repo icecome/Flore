@@ -2,26 +2,26 @@ package models
 
 // Folder 对应 Prisma 的 Folder 表
 type Folder struct {
-	ID        int       `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name      string    `json:"name" gorm:"not null"`
-	ParentID  *int      `json:"parentId" gorm:"column:parentId"`
+	ID            int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name          string    `json:"name" gorm:"not null"`
+	ParentID      *int      `json:"parentId" gorm:"column:parentId"`
 	CreatedAtTime MilliTime `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
 	UpdatedAtTime MilliTime `json:"updatedAt" gorm:"column:updatedAt;autoUpdateTime;autoCreateTime"`
 }
 
 // Source 对应 Prisma 的 Source 表
 type Source struct {
-	ID          int       `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name        string    `json:"name" gorm:"not null"`
-	URL         string    `json:"url" gorm:"not null"`
-	FolderID    *int      `json:"folderId" gorm:"column:folderId;index"`
-	ListRule    string    `json:"listRule" gorm:"column:listRule;not null"`
+	ID             int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name           string    `json:"name" gorm:"not null"`
+	URL            string    `json:"url" gorm:"not null"`
+	FolderID       *int      `json:"folderId" gorm:"column:folderId;index"`
+	ListRule       string    `json:"listRule" gorm:"column:listRule;not null"`
 	Interval       int       `json:"interval" gorm:"default:120"`
 	Active         bool      `json:"active" gorm:"default:true"`
 	IsPrivate      bool      `json:"isPrivate" gorm:"column:isPrivate;default:false;index"`
 	HideInTimeline bool      `json:"hideInTimeline" gorm:"column:hideInTimeline;default:false;index"`
-	CreatedAtTime MilliTime `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
-	UpdatedAtTime MilliTime `json:"updatedAt" gorm:"column:updatedAt;autoUpdateTime;autoCreateTime"`
+	CreatedAtTime  MilliTime `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
+	UpdatedAtTime  MilliTime `json:"updatedAt" gorm:"column:updatedAt;autoUpdateTime;autoCreateTime"`
 
 	// 前端展示用，非数据库字段
 	UnreadCount    int64             `json:"unreadCount" gorm:"-"`
@@ -42,6 +42,9 @@ type SourceHealth struct {
 	// NextRetryAtUnix 退避期截止时间（Unix 秒），0 表示无退避。
 	// 抓取连续失败时递增，避免僵尸源（超时/503）每次全量刷新都拖慢整体。
 	NextRetryAtUnix int64 `json:"nextRetryAtUnix" gorm:"column:nextRetryAtUnix;default:0"`
+	// NextCheckAtUnix 下次自动抓取截止时间（Unix 秒），0 表示使用固定 interval 计算。
+	// 由 adaptiveNextCheckAt 计算，用于自适应调度：活跃源查得频繁，冷门源查得稀疏。
+	NextCheckAtUnix int64 `json:"nextCheckAtUnix" gorm:"column:nextCheckAtUnix;default:0;index"`
 	// 以下两字段缓存源的上次响应头，用于增量抓取（HTTP 304 协商）
 	FeedLastModified *string `json:"feedLastModified" gorm:"column:feedLastModified"`
 	FeedETag         *string `json:"feedEtag" gorm:"column:feedEtag"`
@@ -49,17 +52,17 @@ type SourceHealth struct {
 
 // Item 对应 Prisma 的 Item 表
 type Item struct {
-	ID        int              `json:"id" gorm:"primaryKey;autoIncrement"`
-	SourceID  int              `json:"sourceId" gorm:"column:sourceId;not null;index;uniqueIndex:idx_items_link_source,priority:1"`
-	Title     string           `json:"title" gorm:"not null"`
-	Link      string           `json:"link" gorm:"not null;uniqueIndex:idx_items_link_source,priority:2"`
-	Desc      *string          `json:"desc"`
-	Author    *string          `json:"author"`
-	PubDate   NullableMilliTime `json:"pubDate" gorm:"column:pubDate"`
-	IsRead      bool             `json:"isRead" gorm:"column:isRead;default:false;index"`
-	IsStarred   bool             `json:"isStarred" gorm:"column:isStarred;default:false;index"`
-	IsReadLater bool             `json:"isReadLater" gorm:"column:isReadLater;default:false;index"`
-	CreatedAtTime MilliTime        `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
+	ID            int               `json:"id" gorm:"primaryKey;autoIncrement"`
+	SourceID      int               `json:"sourceId" gorm:"column:sourceId;not null;index;uniqueIndex:idx_items_link_source,priority:1"`
+	Title         string            `json:"title" gorm:"not null"`
+	Link          string            `json:"link" gorm:"not null;uniqueIndex:idx_items_link_source,priority:2"`
+	Desc          *string           `json:"desc"`
+	Author        *string           `json:"author"`
+	PubDate       NullableMilliTime `json:"pubDate" gorm:"column:pubDate"`
+	IsRead        bool              `json:"isRead" gorm:"column:isRead;default:false;index"`
+	IsStarred     bool              `json:"isStarred" gorm:"column:isStarred;default:false;index"`
+	IsReadLater   bool              `json:"isReadLater" gorm:"column:isReadLater;default:false;index"`
+	CreatedAtTime MilliTime         `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
 
 	Source *Source `json:"source,omitempty" gorm:"foreignKey:SourceID;references:ID;constraint:OnDelete:CASCADE"`
 }

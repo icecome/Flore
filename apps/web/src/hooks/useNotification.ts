@@ -19,7 +19,10 @@ export function useNotification({ notifyEnabled, notifyBatchMin, unreadCountInSc
   useEffect(() => {
     if (getDesktopApp()) return;
     if (notifyEnabled && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
+      // 首次进入时静默预请求，失败不打扰用户；真正需要通知时会再次请求并提示
+      Notification.requestPermission().catch((err) => {
+        console.error('Failed to request notification permission:', err);
+      });
     }
   }, [notifyEnabled]);
 
@@ -44,7 +47,9 @@ export function useNotification({ notifyEnabled, notifyBatchMin, unreadCountInSc
           showToast('未授予通知权限，无法推送新文章通知'); // m-01
           return;
         }
-      } catch {
+      } catch (err) {
+        console.error('Failed to request notification permission:', err);
+        showToast('通知权限请求失败，无法推送新文章通知');
         return;
       }
     }

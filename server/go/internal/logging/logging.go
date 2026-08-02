@@ -14,12 +14,12 @@ import (
 
 // RotatingWriter 实现日志轮转
 type RotatingWriter struct {
-	mu           sync.Mutex
-	path         string
-	maxSize      int64
-	maxBackups   int
-	file         *os.File
-	currentSize  int64
+	mu          sync.Mutex
+	path        string
+	maxSize     int64
+	maxBackups  int
+	file        *os.File
+	currentSize int64
 }
 
 // NewRotatingWriter 创建支持轮转的日志写入器

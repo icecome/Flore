@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -239,8 +240,11 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		// 预检原文是否可被 iframe 直接嵌入（检查 X-Frame-Options / CSP frame-ancestors），供前端决定直连还是走代理
 		api.GET("/proxy/check/:id", h.CheckFrameable)
 		api.GET("/proxy/:id", h.ProxyOriginal)
-		sensitive.GET("/image-proxy", h.ProxyImage)
-		sensitive.GET("/css-proxy", h.ProxyCSS)
+		// 图片/CSS/图标代理为只读透传，已被全局速率限制 + 类型白名单 + 尺寸上限保护，
+		// 且需经 <img>/<link> 消费（无法携带 Authorization 头），故置于非敏感组。
+		api.GET("/image-proxy", h.ProxyImage)
+		api.GET("/css-proxy", h.ProxyCSS)
+		api.GET("/favicon-proxy", h.ProxyFavicon)
 
 		// 统计
 		api.GET("/stats/unread", h.GetUnreadCount)
@@ -263,6 +267,11 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		api.POST("/backups/cleanup", h.CleanupBackups)
 		api.POST("/backups/:name/restore", h.RestoreBackup)
 		api.GET("/backups/:name/download", h.DownloadBackup)
+		api.GET("/backups/:name/contents", h.GetBackupContents)
+		sensitive.POST("/backups/:name/restore-config", h.RestoreConfigFromBackup)
+		sensitive.POST("/backups/:name/restore-opml", h.RestoreOPMLFromBackup)
+		// 新增：导入外部备份并返回内容清单
+		api.POST("/backups/restore/import", h.ImportBackupAndValidate)
 
 		// 设置（Settings 表，键值对存储）
 		api.GET("/settings", h.GetSettings)
@@ -361,13 +370,13 @@ func (h *ReaderHandler) UpdateSource(c *gin.Context) {
 	}
 
 	var req struct {
-		Name          *string `json:"name"`
-		URL           *string `json:"url"`
-		FolderID      *int    `json:"folderId"`
-		Active        *bool   `json:"active"`
-		IsPrivate     *bool   `json:"isPrivate"`
-		HideInTimeline *bool  `json:"hideInTimeline"`
-		Interval      *int    `json:"interval"`
+		Name           *string `json:"name"`
+		URL            *string `json:"url"`
+		FolderID       *int    `json:"folderId"`
+		Active         *bool   `json:"active"`
+		IsPrivate      *bool   `json:"isPrivate"`
+		HideInTimeline *bool   `json:"hideInTimeline"`
+		Interval       *int    `json:"interval"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": safeError(err.Error())})
@@ -700,8 +709,14 @@ func (h *ReaderHandler) GetItems(c *gin.Context) {
 	onlyStarred := c.Query("starred") == "true"
 	onlyReadLater := c.Query("readLater") == "true"
 	hidePrivate := c.Query("hidePrivate") == "true"
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if err != nil {
+		limit = 50
+	}
+	offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if err != nil {
+		offset = 0
+	}
 	orderBy := c.DefaultQuery("orderBy", "newest")
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -917,7 +932,10 @@ func (h *ReaderHandler) SearchItems(c *gin.Context) {
 		return
 	}
 
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if err != nil {
+		limit = 50
+	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -1365,37 +1383,74 @@ func (h *ReaderHandler) ProxyCSS(c *gin.Context) {
 	c.String(http.StatusOK, cssContent)
 }
 
-// rewriteCSSLinks 将 HTML 中的 <link rel="stylesheet"> 标签的 href 重写为后端 CSS 代理地址。
-// 使用原文 URL 作为 Referer，绕过 CDN 对 CSS 文件的防盗链检查。
-// 原文 URL 也用于解析相对路径的 CSS URL。
-func rewriteCSSLinks(htmlContent string, originalURL string, apiBase string) string {
-	baseParsed, err := url.Parse(originalURL)
-	if err != nil {
-		return htmlContent
+// ProxyFavicon 代理第三方站点图标服务，返回指定域名对应的 favicon。
+// 设计要点：
+//   - 仅访问后台配置的可信图标服务（FAVICON_SERVICE_BASE，默认 api.iowen.cn），
+//     不接收任意 URL，用户只能提供 domain 作为路径片段，杜绝 SSRF。
+//   - 经后端代理可避免把订阅域名直接泄露给第三方，且国内网络可达。
+//   - 只读透传，已在全局速率限制 + 类型白名单 + 尺寸上限保护下运行，
+//     故注册于非敏感路由组（<img> 无法携带 Authorization 头）。
+// 参数：
+//   - domain: 站点域名（如 example.com），将拼接到图标服务基址之后
+func (h *ReaderHandler) ProxyFavicon(c *gin.Context) {
+	domain := c.Query("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing domain parameter"})
+		return
+	}
+	// 仅允许 hostname 合法字符，拒绝任何可构造出 scheme/路径/查询的注入
+	if !faviconDomainRe.MatchString(domain) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid domain"})
+		return
 	}
 
-	// 匹配 <link rel="stylesheet" href="..."> 或 <link href="..." rel="stylesheet">
-	linkRe := linkRePre
-	hrefRe := hrefRePre
+	upstream := resolveFaviconBase() + "/" + domain + ".png"
+	client := h.service.BuildFetchHTTPClient()
+	resp, err := client.Get(upstream)
+	if err != nil {
+		slog.Warn("favicon proxy upstream error", "domain", domain, "error", err)
+		c.String(http.StatusBadGateway, "favicon proxy error")
+		return
+	}
+	defer resp.Body.Close()
 
-	result := linkRe.ReplaceAllStringFunc(htmlContent, func(match string) string {
-		hrefMatch := hrefRe.FindStringSubmatch(match)
-		if len(hrefMatch) < 2 {
-			return match
-		}
-		cssURL := hrefMatch[1]
-		// 跳过 data: URI 和已经在代理中的 URL
-		if strings.HasPrefix(cssURL, "data:") || strings.Contains(cssURL, "/css-proxy") {
-			return match
-		}
-		// 解析相对 URL 为绝对 URL（基于原文页面 URL）
-		absCSSURL := resolveURL(cssURL, baseParsed)
-		// 构造代理 URL
-		proxyURL := fmt.Sprintf("%s/css-proxy?url=%s&ref=%s", apiBase, url.QueryEscape(absCSSURL), url.QueryEscape(originalURL))
-		return strings.Replace(match, `href="`+cssURL+`"`, `href="`+proxyURL+`"`, 1)
-	})
+	if resp.StatusCode != http.StatusOK {
+		c.String(http.StatusBadGateway, "favicon proxy: upstream returned HTTP %d", resp.StatusCode)
+		return
+	}
 
-	return result
+	contentType := resp.Header.Get("Content-Type")
+	if !isAllowedImageContentType(contentType) {
+		slog.Warn("favicon proxy rejected content-type", "domain", domain, "contentType", contentType)
+		c.String(http.StatusUnsupportedMediaType, "favicon proxy: unsupported content type")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB 限制
+	if err != nil {
+		c.String(http.StatusBadGateway, "favicon proxy: read error: "+err.Error())
+		return
+	}
+	if len(body) == 0 {
+		c.String(http.StatusBadGateway, "favicon proxy: empty response")
+		return
+	}
+
+	c.Header("Content-Type", contentType)
+	c.Header("Cache-Control", "public, max-age=86400")
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Data(http.StatusOK, contentType, body)
+}
+
+// faviconDomainRe 限制 domain 仅含 hostname 合法字符，防止路径/协议注入
+var faviconDomainRe = regexp.MustCompile(`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
+
+// resolveFaviconBase 返回图标服务基址，优先环境变量 FAVICON_SERVICE_BASE，默认国内可达的 api.iowen.cn
+func resolveFaviconBase() string {
+	if v := os.Getenv("FAVICON_SERVICE_BASE"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "https://api.iowen.cn/favicon"
 }
 
 // rewriteCSSUrls 重写 CSS 内容中的 url() 引用为图片代理地址。
@@ -1465,126 +1520,6 @@ func stripCSPMetaTags(htmlContent string) string {
 	return re.ReplaceAllString(htmlContent, "")
 }
 
-// resolveURL 将可能为相对路径的 CSS URL 解析为绝对 URL。
-// 如果 href 已经是绝对 URL 则直接返回；否则基于 baseURL 解析。
-func resolveURL(href string, baseURL *url.URL) string {
-	hrefURL, err := url.Parse(href)
-	if err != nil {
-		return href
-	}
-	if hrefURL.IsAbs() {
-		return href
-	}
-	resolved := baseURL.ResolveReference(hrefURL)
-	return resolved.String()
-}
-
-// inlineExternalCSS 将 HTML 中的外部 CSS <link> 标签内联为 <style> 标签。
-// 解决 iframe 中外部样式无法加载的问题（混合内容限制 + 防盗链）。
-// 使用 server 的 HTTP client 下载 CSS，模拟浏览器请求头。
-// 内联成功时，CSS 中的 url() 引用使用 CSS 文件本身的 URL 作为 base 解析；
-// 内联失败时，降级为 CSS 代理（保留 <link> 但 href 指向后端代理）。
-// referer 为嵌入该 CSS 的页面 URL（即文章原文 URL），用于绕过 CDN 防盗链。
-// apiBase 用于构造 CSS 代理 URL（如 http://localhost:3002/api）。
-func inlineExternalCSS(htmlContent string, baseURLStr string, referer string, client *http.Client, apiBase string) string {
-	baseParsed, err := url.Parse(baseURLStr)
-	if err != nil {
-		return htmlContent
-	}
-
-	// 匹配 <link rel="stylesheet" href="..."> 或 <link href="..." rel="stylesheet">
-	linkRe := linkRePre
-	hrefRe := hrefRePre
-
-	// 查找所有 link 标签位置，并发下载 CSS 以加速内联
-	matches := linkRe.FindAllStringIndex(htmlContent, -1)
-	if len(matches) == 0 {
-		return htmlContent
-	}
-
-	type replacement struct {
-		start int
-		end   int
-		text  string
-	}
-	replacements := make([]replacement, len(matches))
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4) // 并发度限制为 4，避免单页面触发大量请求
-
-	for i, matchIdx := range matches {
-		match := htmlContent[matchIdx[0]:matchIdx[1]]
-		wg.Add(1)
-		go func(idx int, matchStr string, start, end int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			replacements[idx] = replacement{start, end, processSingleLink(matchStr, baseParsed, referer, client, apiBase, hrefRe, baseURLStr)}
-		}(i, match, matchIdx[0], matchIdx[1])
-	}
-	wg.Wait()
-
-	// 逆序应用替换，避免索引偏移
-	result := htmlContent
-	for i := len(replacements) - 1; i >= 0; i-- {
-		r := replacements[i]
-		result = result[:r.start] + r.text + result[r.end:]
-	}
-	return result
-}
-
-// processSingleLink 处理单个 <link> 标签的内联，返回替换后的 HTML 片段
-func processSingleLink(match string, baseParsed *url.URL, referer string, client *http.Client, apiBase string, hrefRe *regexp.Regexp, baseURLStr string) string {
-	hrefMatch := hrefRe.FindStringSubmatch(match)
-	if len(hrefMatch) < 2 {
-		return match
-	}
-	rawHref := hrefMatch[1]
-	if strings.HasPrefix(rawHref, "data:") || strings.Contains(rawHref, "/css-proxy") {
-		return match
-	}
-	cssURL := resolveURL(rawHref, baseParsed)
-
-	resp, err := services.FetchCSS(cssURL, referer, client)
-	if err != nil {
-		slog.Warn("CSS fetch failed, fallback to CSS proxy", "url", cssURL, "error", err)
-		return fallbackToCSSProxy(match, rawHref, cssURL, baseURLStr, apiBase)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		slog.Warn("CSS fetch non-200, fallback to CSS proxy", "url", cssURL, "status", resp.StatusCode)
-		resp.Body.Close()
-		return fallbackToCSSProxy(match, rawHref, cssURL, baseURLStr, apiBase)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB 限制
-	resp.Body.Close()
-	if err != nil {
-		slog.Warn("Failed to read CSS body, fallback to CSS proxy", "url", cssURL, "error", err)
-		return fallbackToCSSProxy(match, rawHref, cssURL, baseURLStr, apiBase)
-	}
-
-	cssContent := string(body)
-	cssContent = inlineCSSImports(cssContent, cssURL, referer, client, 2)
-
-	imageProxyBase := ""
-	if apiBase != "" {
-		imageProxyBase = apiBase + "/image-proxy"
-	}
-	cssContent = rewriteCSSUrlsInContent(cssContent, cssURL, referer, imageProxyBase)
-
-	return fmt.Sprintf("<style>%s</style>", cssContent)
-}
-
-// fallbackToCSSProxy 当 CSS 内联失败时，将 <link> 标签的 href 改为 CSS 代理地址。
-func fallbackToCSSProxy(match string, rawHref string, cssURL string, originalURL string, apiBase string) string {
-	if apiBase == "" {
-		return match
-	}
-	proxyURL := fmt.Sprintf("%s/css-proxy?url=%s&ref=%s", apiBase, url.QueryEscape(cssURL), url.QueryEscape(originalURL))
-	return strings.Replace(match, `href="`+rawHref+`"`, `href="`+proxyURL+`"`, 1)
-}
-
 // rewriteCSSUrlsInContent 重写内联 CSS 内容中的 url() 引用为图片代理地址。
 // 使用 CSS 文件本身的 URL 作为 base 解析相对路径，确保 CSS 中的背景图、字体等资源通过代理加载。
 // referer 用于设置图片代理的 Referer 头，绕过 CDN 防盗链。
@@ -1619,194 +1554,6 @@ func rewriteCSSUrlsInContent(cssContent string, cssURL string, referer string, i
 		proxyURL := fmt.Sprintf("%s?url=%s&ref=%s", imageProxyBase, url.QueryEscape(absSrc), url.QueryEscape(referer))
 		return fmt.Sprintf(`url("%s")`, proxyURL)
 	})
-}
-
-// rewriteImageURLs 将 HTML 中的图片 URL 重写为后端代理地址，绕过 CDN 防盗链。
-// 处理 <img src>、<source srcset>、<img srcset>、<style> 内 url() 以及内联 style 的 url()。
-// 当 iframe 使用 src 加载（而非 srcdoc）时，此函数确保图片仍然通过代理加载。
-func rewriteImageURLs(htmlContent string, originalURL string, proxyBase string) string {
-	if proxyBase == "" {
-		return htmlContent
-	}
-
-	// 辅助函数：解析相对 URL 为绝对 URL
-	resolveSrc := func(src string) string {
-		if src == "" || strings.HasPrefix(src, "data:") || strings.HasPrefix(src, "blob:") || strings.HasPrefix(src, proxyBase) || strings.Contains(src, "/image-proxy") {
-			return ""
-		}
-		if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-			return src
-		}
-		if strings.HasPrefix(src, "//") {
-			return "https:" + src
-		}
-		// 相对路径，基于原文 URL 解析
-		if parsed, err := url.Parse(originalURL); err == nil {
-			if resolved, err := url.Parse(src); err == nil {
-				return parsed.ResolveReference(resolved).String()
-			}
-		}
-		return ""
-	}
-
-	buildProxyURL := func(absSrc string) string {
-		return fmt.Sprintf("%s?url=%s&ref=%s", proxyBase, url.QueryEscape(absSrc), url.QueryEscape(originalURL))
-	}
-
-	rewriteSrcset := func(srcset string) string {
-		parts := strings.Split(srcset, ",")
-		for i, part := range parts {
-			trimmed := strings.TrimSpace(part)
-			fields := strings.Fields(trimmed)
-			if len(fields) == 0 {
-				continue
-			}
-			if absSrc := resolveSrc(fields[0]); absSrc != "" {
-				rest := ""
-				if len(fields) > 1 {
-					rest = " " + strings.Join(fields[1:], " ")
-				}
-				parts[i] = buildProxyURL(absSrc) + rest
-			}
-		}
-		return strings.Join(parts, ", ")
-	}
-
-	// 第一步：重写 <source> 标签的 srcset 属性
-	result := htmlContent
-	sourceRe := regexp.MustCompile(`(?is)<source\s[^>]*srcset\s*=\s*"([^"]*)"[^>]*/?>`)
-	result = sourceRe.ReplaceAllStringFunc(result, func(match string) string {
-		srcsetMatch := sourceRe.FindStringSubmatch(match)
-		if len(srcsetMatch) < 2 {
-			return match
-		}
-		rewritten := rewriteSrcset(srcsetMatch[1])
-		return strings.Replace(match, `srcset="`+srcsetMatch[1]+`"`, `srcset="`+rewritten+`"`, 1)
-	})
-
-	// 第二步：重写 <img> 标签的 src、data-src、data-original、srcset、data-srcset 属性
-	imgRe := regexp.MustCompile(`(?is)<img\s[^>]*/?>`)
-	result = imgRe.ReplaceAllStringFunc(result, func(match string) string {
-		// 单 URL 属性
-		for _, attr := range []string{`src`, `data-src`, `data-original`} {
-			attrRe := regexp.MustCompile(`(?i)` + attr + `\s*=\s*"([^"]*)"`)
-			if m := attrRe.FindStringSubmatch(match); len(m) >= 2 {
-				if absSrc := resolveSrc(m[1]); absSrc != "" {
-					match = strings.Replace(match, m[0], attr+`="`+buildProxyURL(absSrc)+`"`, 1)
-				}
-			}
-		}
-		// 多 URL 属性（srcset 格式）
-		for _, attr := range []string{`srcset`, `data-srcset`} {
-			attrRe := regexp.MustCompile(`(?i)` + attr + `\s*=\s*"([^"]*)"`)
-			if m := attrRe.FindStringSubmatch(match); len(m) >= 2 {
-				rewritten := rewriteSrcset(m[1])
-				match = strings.Replace(match, m[0], attr+`="`+rewritten+`"`, 1)
-			}
-		}
-		return match
-	})
-
-	// 第三步：重写 <style> 标签内 CSS url() 中的图片/字体引用
-	styleRe := regexp.MustCompile(`(?is)<style[^>]*>([\s\S]*?)</style>`)
-	result = styleRe.ReplaceAllStringFunc(result, func(match string) string {
-		content := styleRe.FindStringSubmatch(match)
-		if len(content) < 2 {
-			return match
-		}
-		css := content[1]
-		urlRe := urlRePre
-		rewritten := urlRe.ReplaceAllStringFunc(css, func(u string) string {
-			urlMatch := urlRe.FindStringSubmatch(u)
-			if len(urlMatch) < 2 {
-				return u
-			}
-			if absSrc := resolveSrc(urlMatch[1]); absSrc != "" {
-				return `url("` + buildProxyURL(absSrc) + `")`
-			}
-			return u
-		})
-		// 注意：只替换 style 标签内的 CSS 文本，保留 <style>...</style> 外壳
-		return strings.Replace(match, content[1], rewritten, 1)
-	})
-
-	// 第四步：重写内联 style 属性中的 url()
-	inlineStyleRe := regexp.MustCompile(`style\s*=\s*"([^"]*)"`)
-	result = inlineStyleRe.ReplaceAllStringFunc(result, func(match string) string {
-		styleMatch := inlineStyleRe.FindStringSubmatch(match)
-		if len(styleMatch) < 2 {
-			return match
-		}
-		styleVal := styleMatch[1]
-		urlRe := urlRePre
-		rewritten := urlRe.ReplaceAllStringFunc(styleVal, func(u string) string {
-			urlMatch := urlRe.FindStringSubmatch(u)
-			if len(urlMatch) < 2 {
-				return u
-			}
-			if absSrc := resolveSrc(urlMatch[1]); absSrc != "" {
-				return `url("` + buildProxyURL(absSrc) + `")`
-			}
-			return u
-		})
-		if rewritten == styleVal {
-			return match
-		}
-		return `style="` + rewritten + `"`
-	})
-
-	return result
-}
-
-// inlineCSSImports 递归内联 CSS 中的 @import url(...) 语句。
-// depth 控制递归深度，防止无限递归，maxDepth=2。
-// referer 为页面原文 URL，用于绕过 CDN 防盗链。
-func inlineCSSImports(cssContent string, baseCSSURL string, referer string, client *http.Client, depth int) string {
-	if depth <= 0 {
-		return cssContent
-	}
-	baseParsed, err := url.Parse(baseCSSURL)
-	if err != nil {
-		return cssContent
-	}
-
-	importRe := regexp.MustCompile(`(?is)@import\s+(?:url\s*\(\s*["']?([^"'\s\)]+)["']?\s*\)|["']([^"']+)["'])\s*;?`)
-	result := importRe.ReplaceAllStringFunc(cssContent, func(match string) string {
-		submatch := importRe.FindStringSubmatch(match)
-		var importURL string
-		if len(submatch) > 1 && submatch[1] != "" {
-			importURL = submatch[1]
-		} else if len(submatch) > 2 && submatch[2] != "" {
-			importURL = submatch[2]
-		} else {
-			return match
-		}
-
-		resolvedURL := resolveURL(importURL, baseParsed)
-
-		// 使用页面原文 URL 作为 Referer 下载 @import 的 CSS
-		resp, err := services.FetchCSS(resolvedURL, referer, client)
-		if err != nil {
-			slog.Warn("Failed to fetch @import CSS", "url", resolvedURL, "error", err)
-			return match
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return match
-		}
-
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if err != nil {
-			return match
-		}
-
-		importedCSS := string(body)
-		// 递归处理嵌套的 @import（限制深度）
-		return inlineCSSImports(importedCSS, resolvedURL, referer, client, depth-1)
-	})
-
-	return result
 }
 
 // proxyErrorPage 返回 iframe 内可展示的错误页
@@ -1887,6 +1634,10 @@ func (h *ReaderHandler) ListBackups(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": safeError(err.Error())})
 		return
 	}
+	// 确保即使为 nil 也返回空数组
+	if backups == nil {
+		backups = []services.BackupEntry{}
+	}
 	c.JSON(http.StatusOK, backups)
 }
 
@@ -1961,6 +1712,101 @@ func (h *ReaderHandler) DownloadBackup(c *gin.Context) {
 	c.File(fullPath)
 }
 
+// GetBackupContents 获取备份文件内容清单
+func (h *ReaderHandler) GetBackupContents(c *gin.Context) {
+	name := c.Param("name")
+	contents, err := h.service.GetBackupContents(name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": safeError(err.Error())})
+		return
+	}
+	c.JSON(http.StatusOK, contents)
+}
+
+// ImportBackupAndValidate 导入外部备份文件并返回内容清单（供前端选择恢复粒度）
+// 接收 multipart/form-data，包含一个 "backup" 文件字段
+func (h *ReaderHandler) ImportBackupAndValidate(c *gin.Context) {
+	// 从 multipart form 获取上传的 backup.zip 文件
+	file, err := c.FormFile("backup")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get backup file"})
+		return
+	}
+
+	// 保存到临时文件
+	tmpPath, err := h.saveTempUpload(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save backup file"})
+		return
+	}
+	defer os.Remove(tmpPath)
+
+	// 读取备份内容清单
+	contents, err := h.service.GetBackupContentsFromPath(tmpPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid backup file: " + err.Error()})
+		return
+	}
+
+	// 返回清单信息
+	c.JSON(http.StatusOK, gin.H{
+		"name":    file.Filename,
+		"hasDb":   contents.HasDB,
+		"hasCfg":  contents.HasCfg,
+		"hasOpml": contents.HasOpm, // 修复：正确使用 HasOpm 字段名
+	})
+}
+
+// saveTempUpload 保存上传文件到临时路径（限制 256MB）
+func (h *ReaderHandler) saveTempUpload(file *multipart.FileHeader) (string, error) {
+	src, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	tmpFile, err := os.CreateTemp("", "flore-restore-import-*.zip")
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(tmpFile.Name())
+		}
+	}()
+
+	_, err = io.Copy(tmpFile, io.LimitReader(src, 256<<20))
+	if err != nil {
+		tmpFile.Close()
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", err
+	}
+
+	return tmpFile.Name(), nil
+}
+
+// RestoreConfigFromBackup 从备份中仅恢复配置项
+func (h *ReaderHandler) RestoreConfigFromBackup(c *gin.Context) {
+	name := c.Param("name")
+	if err := h.service.RestoreConfigFromBackup(name); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": safeError(err.Error())})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// RestoreOPMLFromBackup 从备份中仅恢复订阅源
+func (h *ReaderHandler) RestoreOPMLFromBackup(c *gin.Context) {
+	name := c.Param("name")
+	if err := h.service.RestoreOPMLFromBackup(name); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": safeError(err.Error())})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // GetSettings 获取所有设置项
 func (h *ReaderHandler) GetSettings(c *gin.Context) {
 	settings, err := h.service.GetAllSettings()
@@ -2014,10 +1860,10 @@ func (h *ReaderHandler) UpdateSettings(c *gin.Context) {
 // CleanupArticles 按留存策略清理已读文章
 func (h *ReaderHandler) CleanupArticles(c *gin.Context) {
 	var req struct {
-		RetentionDays      int  `json:"retentionDays"`
-		RetentionMax       int  `json:"retentionMax"`
-		ExcludeStarred     bool `json:"excludeStarred"`
-		ExcludeReadLater   bool `json:"excludeReadLater"`
+		RetentionDays    int  `json:"retentionDays"`
+		RetentionMax     int  `json:"retentionMax"`
+		ExcludeStarred   bool `json:"excludeStarred"`
+		ExcludeReadLater bool `json:"excludeReadLater"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": safeError(err.Error())})
@@ -2032,8 +1878,17 @@ func (h *ReaderHandler) CleanupArticles(c *gin.Context) {
 }
 
 // GetVersion 返回应用版本信息
-// 版本号在编译时通过 -ldflags 注入（-X github.com/rss/go-server/internal/handlers.appVersion=x.y.z），未注入时使用默认值
-var appVersion = "0.0.1.20260730"
+// 版本来源优先级：编译时 -ldflags 注入 > 环境变量 FLORE_VERSION > 默认值 "dev"
+// -ldflags 示例：-X github.com/rss/go-server/internal/handlers.appVersion=x.y.z
+var appVersion = resolveAppVersion()
+
+// resolveAppVersion 确定版本号：优先环境变量，其次返回 dev 占位符（生产构建由 ldflags 注入真实版本）
+func resolveAppVersion() string {
+	if v := os.Getenv("FLORE_VERSION"); v != "" {
+		return v
+	}
+	return "dev"
+}
 
 func (h *ReaderHandler) GetVersion(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{

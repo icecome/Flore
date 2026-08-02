@@ -240,9 +240,8 @@ func (c *FetchCoordinator) LastRoundNewItems() int {
 	return int(c.lastRoundNewItems.Load())
 }
 
-// worker 从任务队列取 sourceID，执行完整抓取流水线。
-// 一个 worker 跑完整条线：fetch → parse → upsert → index，
-// 不再为索引单独起 goroutine，避免连接池耗尽与竞态。
+// worker 从任务队列取 sourceID，执行抓取流水线。
+// 新文章 FTS5 索引由后台 goroutine 异步处理，worker 不等待，降低串行阻塞。
 func (c *FetchCoordinator) worker() {
 	defer c.wg.Done()
 	for sourceID := range c.taskCh {
@@ -252,7 +251,7 @@ func (c *FetchCoordinator) worker() {
 		c.inFlight[sourceID] = struct{}{}
 		c.mu.Unlock()
 
-		// 执行抓取（含 upsert + 索引 + 健康更新），累加本轮新增条目数
+		// 执行抓取（含 upsert + 健康更新），新文章索引由后台 goroutine 异步处理
 		newCount, err := c.service.FetchSourceFeed(sourceID)
 		if err != nil {
 			slog.Warn("fetch source feed failed", "source_id", sourceID, "error", err)

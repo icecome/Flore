@@ -13,7 +13,7 @@ import (
 // CurrentSchemaVersion 当前数据库 schema 版本。
 // 每次有破坏性变更（列重命名、数据迁移等）时递增。
 // 新增列/表由 AutoMigrate 自动处理，无需递增版本号。
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 3
 
 // Migration 定义一次版本化迁移
 type Migration struct {
@@ -26,8 +26,10 @@ type Migration struct {
 // 新增迁移时在此追加，同时递增 CurrentSchemaVersion
 var migrations = []Migration{
 	// v1: 初始 schema，当前所有数据库均为此版本
-	// 后续版本在此追加，例如：
-	// {Version: 2, Name: "rename item column", Migrate: migrateV2},
+	// v2: 将 pubDate text 格式统一转换为 integer 毫秒时间戳
+	{Version: 2, Name: "migrate pubDate to integer milliseconds", Migrate: migrateV2PubDate},
+	// v3: 为 SourceHealth 添加 NextCheckAtUnix 列（由 AutoMigrate 自动建列，此迁移推进版本）
+	{Version: 3, Name: "add NextCheckAtUnix to SourceHealth", Migrate: migrateV3NextCheckAtUnix},
 }
 
 // getSchemaVersion 从 Setting 表读取当前 schema 版本号。

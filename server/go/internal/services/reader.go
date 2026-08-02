@@ -29,9 +29,9 @@ type ReaderService struct {
 	// unreadCountCache 缓存各订阅源未读数，避免每次 GetSources 都 GROUP BY 聚合。
 	// 变更事件（标已读/抓取写入/删源/导入恢复）通过 invalidateUnreadCount 整体失效，
 	// 下次访问自动重算；进程重启后首次访问亦自愈。
-	unreadCountCache   map[int]int64
-	unreadCountMu      sync.RWMutex
-	unreadCountReady   bool
+	unreadCountCache map[int]int64
+	unreadCountMu    sync.RWMutex
+	unreadCountReady bool
 
 	// cachedHTTPClient 缓存的 HTTP 客户端，在代理设置变更时重建
 	cachedHTTPClient    *http.Client
@@ -47,6 +47,12 @@ type ReaderService struct {
 	filterRulesCache    []FilterRuleWithConditions
 	filterRulesCacheMu  sync.RWMutex
 	filterRulesCacheSeq int64 // 规则变更时递增，使缓存失效
+
+	// indexChan 接收需建索引/应用规则的 itemID，后台 goroutine 批量处理
+	// 避免每条新文章单独开事务，将 N 次 DB 写操作合并为 1 次批量事务
+	indexChan chan int
+	// indexWG 等待所有待处理 itemID 完成索引/规则应用后退出
+	indexWG sync.WaitGroup
 }
 
 // 单例：确保 handler 和 scheduler 共享同一个实例，
@@ -59,8 +65,14 @@ var (
 // NewReaderService 创建阅读器服务（单例）
 func NewReaderService() *ReaderService {
 	readerServiceOnce.Do(func() {
-		s := &ReaderService{db: database.DB}
+		s := &ReaderService{
+			db:        database.DB,
+			indexChan: make(chan int, 2048),
+		}
 		s.proxySettingsSeq = s.loadProxySettingsSeq()
+		// 启动后台批量索引 goroutine，消费 indexChan 中的 itemID
+		s.indexWG.Add(1)
+		go s.indexWorker()
 		readerServiceInstance = s
 	})
 	return readerServiceInstance
@@ -103,6 +115,12 @@ func (s *ReaderService) SetCoordinator(c *FetchCoordinator) {
 // Coordinator 返回抓取协调器，供 handler/scheduler 调用 Submit。
 func (s *ReaderService) Coordinator() *FetchCoordinator {
 	return s.coordinator
+}
+
+// WaitIndexChan 等待后台批量索引 goroutine 处理完所有待处理 itemID。
+// 供 Coordinator.worker 在抓取完成后调用，确保本轮新文章索引和规则应用均已完成。
+func (s *ReaderService) WaitIndexChan() {
+	s.indexWG.Wait()
 }
 
 // GetSources 获取所有订阅源，包含未读数与健康状态
@@ -227,13 +245,13 @@ func (s *ReaderService) GetSource(id int) (*models.Source, error) {
 
 // UpdateSourceRequest 更新订阅源的请求参数
 type UpdateSourceRequest struct {
-	Name          *string `json:"name"`
-	URL           *string `json:"url"`
-	FolderID      *int    `json:"folderId"`
-	Active        *bool   `json:"active"`
-	IsPrivate     *bool   `json:"isPrivate"`
-	HideInTimeline *bool  `json:"hideInTimeline"`
-	Interval      *int    `json:"interval"`
+	Name           *string `json:"name"`
+	URL            *string `json:"url"`
+	FolderID       *int    `json:"folderId"`
+	Active         *bool   `json:"active"`
+	IsPrivate      *bool   `json:"isPrivate"`
+	HideInTimeline *bool   `json:"hideInTimeline"`
+	Interval       *int    `json:"interval"`
 }
 
 // UpdateSource 更新订阅源
@@ -531,12 +549,12 @@ func (s *ReaderService) CreateSource(req CreateSourceRequest) (*models.Source, e
 
 	now := models.MilliTime{T: time.Now()}
 	source := models.Source{
-		Name:      req.Name,
-		URL:       req.URL,
-		FolderID:  req.FolderID,
-		ListRule:  "rss",
-		Interval:  req.Interval,
-		Active:    true,
+		Name:          req.Name,
+		URL:           req.URL,
+		FolderID:      req.FolderID,
+		ListRule:      "rss",
+		Interval:      req.Interval,
+		Active:        true,
 		CreatedAtTime: now,
 		UpdatedAtTime: now,
 	}
@@ -673,10 +691,10 @@ const (
 
 // OPML 导入导出结构
 type opmlDocument struct {
-	XMLName xml.Name    `xml:"opml"`
-	Version string      `xml:"version,attr"`
-	Head    opmlHead    `xml:"head"`
-	Body    opmlBody    `xml:"body"`
+	XMLName xml.Name `xml:"opml"`
+	Version string   `xml:"version,attr"`
+	Head    opmlHead `xml:"head"`
+	Body    opmlBody `xml:"body"`
 }
 
 type opmlHead struct {
@@ -829,12 +847,12 @@ func (s *ReaderService) createSourceFromOPML(tx *gorm.DB, folderID *int, outline
 	name := firstNonEmpty(outline.Text, outline.Title, url)
 	now := models.MilliTime{T: time.Now()}
 	source := models.Source{
-		Name:      name,
-		URL:       url,
-		FolderID:  folderID,
-		ListRule:  "rss",
-		Interval:  120,
-		Active:    true,
+		Name:          name,
+		URL:           url,
+		FolderID:      folderID,
+		ListRule:      "rss",
+		Interval:      120,
+		Active:        true,
 		CreatedAtTime: now,
 		UpdatedAtTime: now,
 	}
@@ -1225,7 +1243,11 @@ func isValidByline(byline string) bool {
 		return false
 	}
 	// 纯数字或编号类文本不是有效作者
-	if matched, _ := regexp.MatchString(`^\d+$`, byline); matched {
+	matched, err := regexp.MatchString(`^\d+$`, byline)
+	if err != nil {
+		return false
+	}
+	if matched {
 		return false
 	}
 	return true
@@ -1241,7 +1263,9 @@ func (s *ReaderService) GetOriginalURL(id int) (string, error) {
 }
 
 // updateSourceHealth 更新订阅源健康状态
-func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.NullableMilliTime, lastSuccessAt models.NullableMilliTime, lastError string) {
+// newCount 为本轮新增文章数，用于自适应调度计算 NextCheckAtUnix
+// interval 为该源的抓取间隔（分钟），用于自适应调度计算下次检查时间
+func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.NullableMilliTime, lastSuccessAt models.NullableMilliTime, lastError string, newCount int, interval int) {
 	var health models.SourceHealth
 	if err := s.getDb().Where("sourceId = ?", sourceID).First(&health).Error; err != nil {
 		// 记录不存在则创建
@@ -1254,6 +1278,8 @@ func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.Null
 		health.FetchFailCount = 0
 		health.LastError = nil
 		health.NextRetryAtUnix = 0
+		// 自适应调度：根据新增文章数动态计算下次检查时间
+		health.NextCheckAtUnix = s.adaptiveNextCheckAt(interval, newCount)
 	} else {
 		health.FetchFailCount++
 		if lastError != "" {
@@ -1265,6 +1291,41 @@ func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.Null
 
 	if err := s.getDb().Save(&health).Error; err != nil {
 		slog.Warn("failed to update source health", "source_id", health.SourceID, "error", err)
+	}
+}
+
+// adaptiveNextCheckAt 根据新增文章数计算下次检查时间戳（Unix 秒）。
+// 行为类似 Miniflux 的 entry_frequency 调度器：
+//   - 0 条新增：延长到 MAX_INTERVAL（默认 3 天）
+//   - 1-5 条：使用源配置的 interval
+//   - 6+ 条：缩短到 MIN_INTERVAL（默认 20 分钟）
+func (s *ReaderService) adaptiveNextCheckAt(interval int, newCount int) int64 {
+	minInterval := s.GetSettingInt("fetchMinInterval", 20)
+	maxInterval := s.GetSettingInt("fetchMaxInterval", 4320) // 默认 3 天（分钟）
+	if minInterval <= 0 {
+		minInterval = 20
+	}
+	if maxInterval <= 0 {
+		maxInterval = 4320
+	}
+	if interval <= 0 {
+		interval = 120 // 默认 2 小时
+	}
+
+	now := time.Now()
+	switch {
+	case newCount == 0:
+		// 无新文章：延长检查间隔
+		nextCheck := now.Add(time.Duration(maxInterval) * time.Minute)
+		return nextCheck.Unix()
+	case newCount <= 5:
+		// 少量新文章：使用源配置的 interval
+		nextCheck := now.Add(time.Duration(interval) * time.Minute)
+		return nextCheck.Unix()
+	default:
+		// 大量新文章：缩短到最小间隔
+		nextCheck := now.Add(time.Duration(minInterval) * time.Minute)
+		return nextCheck.Unix()
 	}
 }
 
@@ -1514,3 +1575,94 @@ func (s *ReaderService) findCleanupKeepItems(tx *gorm.DB, retentionMax int, excl
 	return keepIDs, err
 }
 
+// indexWorker 后台 goroutine：从 indexChan 批量消费 itemID，合并写 FTS5 索引和过滤规则。
+// 将原本 N 次独立事务合并为 1 次批量事务，大幅降低 SQLite 磁盘 I/O。
+func (s *ReaderService) indexWorker() {
+	defer s.indexWG.Done()
+	const batchSize = 256
+	batch := make([]int, 0, batchSize)
+	for {
+		// 先取第一个 ID 阻塞，后续批量非阻塞补充
+		id := <-s.indexChan
+		batch = append(batch, id)
+		for len(batch) < batchSize {
+			select {
+			case id := <-s.indexChan:
+				batch = append(batch, id)
+			default:
+				goto process
+			}
+		}
+	process:
+		if err := s.indexBatch(batch); err != nil {
+			slog.Warn("index batch failed", "count", len(batch), "error", err)
+		}
+		batch = batch[:0]
+	}
+}
+
+// indexBatch 批量写入 FTS5 索引并应用过滤规则，单次事务完成。
+func (s *ReaderService) indexBatch(itemIDs []int) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	return s.getDb().Transaction(func(tx *gorm.DB) error {
+		// 批量删除旧索引
+		if err := tx.Exec("DELETE FROM ItemSearch WHERE itemId IN ?", itemIDs).Error; err != nil {
+			return err
+		}
+		// 批量插入新索引
+		if err := tx.Exec(`
+			INSERT INTO ItemSearch(title, content, itemId)
+			SELECT i.title, COALESCE(i.desc, ''), i.id
+			FROM Item i WHERE i.id IN ?
+		`, itemIDs).Error; err != nil {
+			return err
+		}
+		// 批量应用过滤规则：先查所有待处理文章及其源信息
+		type itemSourceRow struct {
+			ItemID         int    `gorm:"column:itemId"`
+			Title          string `gorm:"column:title"`
+			Desc           string `gorm:"column:desc"`
+			SourceID       int    `gorm:"column:sourceId"`
+			SourceName     string `gorm:"column:sourceName"`
+			SourceFolderID *int   `gorm:"column:sourceFolderId"`
+		}
+		var rows []itemSourceRow
+		if err := tx.Table("Item").
+			Select(`Item.id as itemId, Item.title, COALESCE(Item.desc, '') as desc,
+			        Item.sourceId, Source.name as sourceName, Source.folderId as sourceFolderId`).
+			Joins("LEFT JOIN Source ON Item.sourceId = Source.id").
+			Where("Item.id IN ?", itemIDs).
+			Scan(&rows).Error; err != nil {
+			return err
+		}
+		// 应用过滤规则（复用现有逻辑，但改为批量）
+		rules, err := s.GetFilterRules()
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			item := models.ItemWithSource{
+				Item:           models.Item{ID: row.ItemID, Title: row.Title, Desc: &row.Desc, SourceID: row.SourceID},
+				SourceName:     row.SourceName,
+				SourceFolderID: row.SourceFolderID,
+			}
+			for _, rule := range rules {
+				if !rule.Enabled {
+					continue
+				}
+				if !ruleMatchesScope(rule, item) {
+					continue
+				}
+				if !ruleMatchesConditions(rule.Conditions, item) {
+					continue
+				}
+				if _, err := s.applyRuleAction(tx, row.ItemID, rule.Action); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}

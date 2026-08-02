@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Filter, Check, Pencil, Trash2, Plus, X, Search, RefreshCw, ExternalLink } from '../icons';
 import { cn } from '../../lib/cn';
 import type { Source, Folder, FilterRule, FilterCondition, Item } from '../../types';
-import { getApi } from '../../utils/api';
+import { testFilterRule } from '../../utils/api';
 import { showToast } from '../../utils/toast';
 import ModalLayout from '../ModalLayout';
 import { Section, SmallBtn } from './SettingsShared';
@@ -155,11 +155,10 @@ export default function SettingsRulesTab(props: Props) {
   const handleTestRule = async (rule: FilterRule) => {
     setTestingId(rule.id);
     try {
-      const res = await fetch(`${getApi()}/filter-rules/${rule.id}/test`, { method: 'POST' });
-      if (!res.ok) throw new Error('测试失败');
-      const items = (await res.json()) as Item[];
+      const items = await testFilterRule(rule.id);
       setTestResults({ ruleName: rule.name, items: Array.isArray(items) ? items : [] });
-    } catch {
+    } catch (err) {
+      console.error('Failed to test filter rule:', err);
       showToast('规则测试失败');
     } finally {
       setTestingId(null);
@@ -167,7 +166,7 @@ export default function SettingsRulesTab(props: Props) {
   };
 
   return (
-    <div>
+    <div className="min-h-0 flex-1 overflow-y-auto">
       <Section title={editingRuleId ? '编辑规则' : '添加规则'}>
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">

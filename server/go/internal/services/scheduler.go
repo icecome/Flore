@@ -121,19 +121,20 @@ func (sch *Scheduler) Stop() {
 	sch.wg.Wait()
 }
 
-// runOnce 执行一轮调度：筛选到期的源提交给 Coordinator，并触发备份与文章清理。
-// 不再做并发控制——Coordinator 自带去重与 worker 池。
+// runOnce 执行一轮调度：查询到期的源并提交给 Coordinator，并触发备份与文章清理。
+// 使用索引查询（NextCheckAtUnix <= now）替代全表扫描，O(log N) 而非 O(N)。
 func (sch *Scheduler) runOnce() {
-	sources, err := sch.service.GetSources()
+	toFetch, err := sch.service.getDueSources()
 	if err != nil {
-		slog.Error("scheduler: failed to get sources", "error", err)
+		slog.Error("scheduler: failed to query due sources", "error", err)
 		return
 	}
 
-	toFetch := filterSourcesToFetch(sources)
 	if len(toFetch) > 0 && sch.service.Coordinator() != nil {
 		n := sch.service.Coordinator().SubmitAll(toFetch)
 		slog.Info("scheduler: submitted fetch tasks", "total", len(toFetch), "queued", n)
+	} else {
+		slog.Debug("scheduler: no sources due for fetch")
 	}
 
 	// 备份与文章清理（与抓取独立，互不阻塞）
@@ -143,6 +144,35 @@ func (sch *Scheduler) runOnce() {
 		sch.maybeRunBackup()
 		sch.maybeRunRetention()
 	}()
+}
+
+// getDueSources 查询需要抓取的源 ID 列表。
+// 优先使用 NextCheckAtUnix 索引（自适应调度），兼容无此字段的旧数据（回退到固定 interval）。
+func (s *ReaderService) getDueSources() ([]int, error) {
+	type dueSource struct {
+		SourceID int `gorm:"column:source_id"`
+	}
+	var rows []dueSource
+	now := time.Now().Unix()
+
+	// 查询所有 active 源中 NextCheckAtUnix <= now 或 NextCheckAtUnix = 0（旧数据/首次）的源
+	if err := s.getDb().Raw(`
+		SELECT h.sourceId as source_id
+		FROM SourceHealth h
+		JOIN Source s ON s.id = h.sourceId
+		WHERE s.active = true
+		  AND (h.nextCheckAtUnix <= ? OR h.nextCheckAtUnix = 0)
+		  AND h.nextRetryAtUnix = 0
+		ORDER BY h.nextCheckAtUnix NULLS FIRST
+	`, now).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	ids := make([]int, len(rows))
+	for i, row := range rows {
+		ids[i] = row.SourceID
+	}
+	return ids, nil
 }
 
 // maybeRunBackup 根据设置决定是否触发自动备份
@@ -180,6 +210,15 @@ func (sch *Scheduler) maybeRunBackup() {
 	sch.mu.Unlock()
 	sch.persistLastBackupAt(now)
 	slog.Debug("scheduler: auto backup created", "name", name)
+
+	// 清理过期备份
+	maxKeep := sch.service.GetSettingInt("backupMaxKeep", 10)
+	maxDays := sch.service.GetSettingInt("backupMaxDays", 30)
+	if deleted, err := sch.service.CleanupBackups(maxKeep, maxDays); err != nil {
+		slog.Warn("scheduler: backup cleanup failed", "error", err)
+	} else if deleted > 0 {
+		slog.Info("scheduler: cleaned expired backups", "deleted", deleted)
+	}
 
 	// 自动整理压缩：备份完成后对实时库做一次 VACUUM，回收删除产生的空闲空间（M-P1）
 	if err := sch.service.Vacuum(); err != nil {

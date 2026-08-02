@@ -18,7 +18,7 @@ interface Props {
 
 export default function SettingsNotifyTab({ settings, updateSetting }: Props) {
   return (
-    <div>
+    <div className="min-h-0 flex-1 overflow-y-auto">
       <Section title="窗口行为">
         <Row
           title="关闭按钮行为"

@@ -1,20 +1,20 @@
 {
-  "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "flore",
-  "outputfilename": "Flore",
-  "frontend:install": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1 -Install",
-  "frontend:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1",
-  "frontend:dev:watcher": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1 -Dev",
-  "frontend:dev:serverUrl": "auto",
-  "author": {
-    "name": "Lice",
-    "email": "werrice@outlook.com"
-  },
-  "info": {
-    "companyName": "Flore",
-    "productName": "Flore",
-    "productVersion": "1.0.0",
-    "copyright": "Copyright © Flore",
-    "comments": "Flore RSS Reader"
-  }
+    "$schema":  "https://wails.io/schemas/config.v2.json",
+    "name":  "flore",
+    "outputfilename":  "Flore",
+    "frontend:install":  "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1 -Install",
+    "frontend:build":  "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1",
+    "frontend:dev:watcher":  "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\build-frontend.ps1 -Dev",
+    "frontend:dev:serverUrl":  "auto",
+    "author":  {
+                   "name":  "Lice",
+                   "email":  "werrice@outlook.com"
+               },
+    "info":  {
+                 "companyName":  "Flore",
+                 "productName":  "Flore",
+                 "productVersion":  "0.0.1-20260802",
+                 "copyright":  "Copyright © Flore",
+                 "comments":  "Flore RSS Reader"
+             }
 }

@@ -1,3 +1,51 @@
-build/bin
 node_modules
 frontend/dist
+# Ignore build-artifact copies from apps/web/public/ (source of truth is web/public/)
+frontend/android-chrome-*.png
+frontend/apple-touch-icon.png
+frontend/favicon*
+frontend/index.html
+frontend/manifest.json
+frontend/sw.js
+frontend/assets/
+
+# ---------------------------------------------------------------------------
+# C4：反向豁免 apps/desktop/build/ 下的 Wails 资源文件。
+#
+# 根 .gitignore 的 `build/` 规则会忽略整个目录。Git 不会递归进入被忽略的目录，
+# 因此「被忽略目录下的文件无法被 ! 豁免」——必须先豁免目录本身，再逐级下钻：
+#   1. `!build/`         取消对目录的忽略
+#   2. `build/*`         重新忽略其下全部内容（构建产物）
+#   3. `!build/<file>`   逐个豁免需要入库的资源
+# 缺少这些资源时 `go:embed build/favicon.png` 与 `wails build` 会在干净检出上直接失败。
+# ---------------------------------------------------------------------------
+!build/
+build/*
+
+# 应用图标（systray.go 通过 go:embed 引用 favicon.png）
+!build/appicon.png
+!build/favicon.png
+!build/favicon.ico
+!build/README.md
+
+# Windows 打包资源
+!build/windows/
+build/windows/*
+!build/windows/icon.ico
+!build/windows/info.json
+!build/windows/wails.exe.manifest
+!build/windows/installer/
+build/windows/installer/*
+!build/windows/installer/project.nsi
+!build/windows/installer/wails_tools.nsh
+
+# macOS 打包资源
+!build/darwin/
+build/darwin/*
+!build/darwin/Info.plist
+!build/darwin/Info.dev.plist
+
+# 构建产物与便携包始终排除
+build/bin/
+build/Flore-portable/
+build/Flore-portable*.zip

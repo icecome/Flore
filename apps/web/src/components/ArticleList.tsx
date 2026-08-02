@@ -1,6 +1,7 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { Folder, Item, Source } from '../types';
-import { cn, formatDate, formatTime, formatRelative } from '../lib/cn';
+import { cn } from '../lib/cn';
+import { formatDate, formatTime, formatRelative } from '../lib/format';
 import type { AppSettings } from '../utils/settings';
 import ContextMenu from './ContextMenu';
 import IconButton from './IconButton';
@@ -98,10 +99,10 @@ export default function ArticleList({
   onLoadMore,
 }: Props) {
   const { menuProps, showMenu } = useContextMenu();
-  const itemRefs = React.useRef<Map<number, HTMLDivElement>>(new Map());
-  
-  // 记忆文章列表滚动位置，避免刷新时重置到顶部
-  const [scrollPosition, setScrollPosition] = useState(0);
+  const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  // 记忆文章列表滚动位置：存在 ref 中，避免「滚动 → setState → 重渲染 → 复位滚动」的回环
+  const scrollPositionRef = useRef(0);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
 
   // 无限滚动：用 ref 持有最新状态，避免 useEffect([]) 闭包捕获过期值导致自动加载失效
@@ -112,13 +113,17 @@ export default function ArticleList({
   }>({ hasMore, loadingMore, onLoadMore });
   loadMoreStateRef.current = { hasMore, loadingMore, onLoadMore };
 
+  // 右键菜单需要完整列表，用 ref 持有以保证回调引用稳定（否则每次 items 变化都会让所有行重渲染）
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
   // 监听容器滚动，保存当前位置 + 触底自动加载下一页
-  React.useEffect(() => {
-     const container = listContainerRef.current;
-     if (!container) return;
-     
+  useEffect(() => {
+    const container = listContainerRef.current;
+    if (!container) return;
+
     const handleScroll = () => {
-      setScrollPosition(container.scrollTop);
+      scrollPositionRef.current = container.scrollTop;
       // 触底自动加载下一页（无限滚动）；状态从 ref 读取，避免闭包捕获过期值
       const state = loadMoreStateRef.current;
       if (state.onLoadMore && state.hasMore && !state.loadingMore) {
@@ -126,32 +131,27 @@ export default function ArticleList({
         if (nearBottom) state.onLoadMore();
       }
     };
-     container.addEventListener('scroll', handleScroll, { passive: true });
-     return () => container.removeEventListener('scroll', handleScroll);
-   }, []); 
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
 
-   // 当 items 变化时（刷新后），恢复之前的滚动位置
-   React.useLayoutEffect(() => {
-     if (scrollPosition > 0 && listContainerRef.current) {
-       // useLayoutEffect 在浏览器绘制之前执行，避免滚动跳动
-       listContainerRef.current.scrollTo({ 
-         top: scrollPosition, 
-         behavior: 'smooth' 
-       });
-     }
-   }, [items, scrollPosition]);
+  // items 变化（刷新 / 加载更多）后恢复滚动位置；behavior:'auto' 保证一帧内完成，不产生新的平滑滚动事件流
+  useLayoutEffect(() => {
+    const container = listContainerRef.current;
+    if (!container) return;
+    const top = scrollPositionRef.current;
+    if (top <= 0 || Math.abs(container.scrollTop - top) < 1) return;
+    container.scrollTo({ top, behavior: 'auto' });
+  }, [items]);
 
-  React.useEffect(() => {
-    if (focusedId) {
-      const el = itemRefs.current.get(focusedId);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    }
+  useEffect(() => {
+    if (!focusedId) return;
+    const el = itemRefs.current.get(focusedId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [focusedId]);
 
   // 单个 IntersectionObserver 监听所有文章条目的滚动可见性
-  React.useEffect(() => {
+  useEffect(() => {
     if (settings.markReadMode !== 'scroll') return;
 
     // 跟踪已可见的条目，仅当从可见变为不可见时才标记已读
@@ -178,8 +178,8 @@ export default function ArticleList({
   }, [settings.markReadMode, onToggleRead, items]);
 
   // 刷新旋转：直接操作 DOM，彻底绕过 CSS 动画问题
-  const refreshIconRef = React.useRef<SVGSVGElement>(null);
-  React.useEffect(() => {
+  const refreshIconRef = useRef<SVGSVGElement>(null);
+  useEffect(() => {
     const el = refreshIconRef.current;
     if (!el) return;
     if (!refreshing) {
@@ -202,25 +202,71 @@ export default function ArticleList({
     return () => cancelAnimationFrame(rafId);
   }, [refreshing]);
 
-  const getScope = () => {
+  const getScope = useCallback(() => {
     if (currentSource) return { sourceId: currentSource.id };
     if (currentFolder) return { folderId: currentFolder.id };
     return {};
-  };
+  }, [currentSource, currentFolder]);
 
   const canMarkAllRead = filter !== 'starred';
 
-  const handleMarkAllRead = () => {
+  const handleMarkAllRead = useCallback(() => {
     if (!canMarkAllRead) return;
     onMarkAllRead(getScope());
-  };
+  }, [canMarkAllRead, getScope, onMarkAllRead]);
 
-  const handleFetch = () => onFetch(getScope());
+  const handleFetch = useCallback(() => onFetch(getScope()), [getScope, onFetch]);
+
+  // ---- 行级稳定回调：保证 ArticleRow 的 React.memo 生效 ----
+  const registerRef = useCallback((id: number, el: HTMLDivElement | null) => {
+    if (el) itemRefs.current.set(id, el);
+    else itemRefs.current.delete(id);
+  }, []);
+
+  const handleActivate = useCallback((item: Item) => {
+    if (multiSelectMode) onToggleSelect?.(item.id);
+    else onSelectItem(item);
+  }, [multiSelectMode, onSelectItem, onToggleSelect]);
+
+  const handleToggleSelect = useCallback((id: number) => {
+    onToggleSelect?.(id);
+  }, [onToggleSelect]);
+
+  const handleRowContextMenu = useCallback((e: React.MouseEvent, item: Item) => {
+    showMenu(e, buildArticleRowMenu(item, itemsRef.current, !!multiSelectMode, {
+      onToggleMultiSelect,
+      onExport,
+      onToggleRead,
+      onToggleStar,
+      onToggleReadLater,
+      onBatchMarkRead,
+    }));
+  }, [multiSelectMode, onBatchMarkRead, onExport, onToggleMultiSelect, onToggleRead, onToggleReadLater, onToggleStar, showMenu]);
+
+  const handleListContextMenu = useCallback((e: React.MouseEvent) => {
+    showMenu(e, buildArticleListHeaderMenu({
+      onFetch: handleFetch,
+      onMarkAllRead: handleMarkAllRead,
+      onToggleMultiSelect,
+    }, canMarkAllRead));
+  }, [canMarkAllRead, handleFetch, handleMarkAllRead, onToggleMultiSelect, showMenu]);
+
+  const handleSelectAll = useCallback(() => {
+    onSelectAll?.(itemsRef.current.map((it) => it.id));
+  }, [onSelectAll]);
+
+  const handleToggleUnreadFilter = useCallback(() => {
+    onSelectFilter(filter === 'unread' ? 'all' : 'unread');
+  }, [filter, onSelectFilter]);
 
   const title = getArticleListTitle({ isSearchMode, filter, currentSource, currentFolder });
 
   // 显示计数信息：仅全部文章 / 源 / 文件夹视图显示"· N 未读"
   const showHeaderCount = useMemo(() => {
+    // 未读视图：显示未读数作为总数（不显示"未读"后缀，因为本身就是未读）
+    if (filter === 'unread') {
+      return { total: globalUnreadCount, unread: 0 };
+    }
     const isGlobalScope = !isSearchMode && filter === 'all' && !currentSource && !currentFolder;
     const isSourceOrFolder = !isSearchMode && (currentSource || currentFolder);
     if (isGlobalScope || isSourceOrFolder) {
@@ -235,11 +281,7 @@ export default function ArticleList({
       {/* Header */}
       <header
         className="flex shrink-0 flex-col gap-2 border-b border-border-subtle px-4 pb-2.5 pt-3"
-        onContextMenu={(e) => showMenu(e, buildArticleListHeaderMenu({
-          onFetch: handleFetch,
-          onMarkAllRead: handleMarkAllRead,
-          onToggleMultiSelect,
-        }, canMarkAllRead))}
+        onContextMenu={handleListContextMenu}
       >
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-baseline gap-2">
@@ -258,7 +300,7 @@ export default function ArticleList({
             </IconButton>
             <IconButton
               size="sm"
-              onClick={() => onSelectFilter(filter === 'unread' ? 'all' : 'unread')}
+              onClick={handleToggleUnreadFilter}
               title={filter === 'unread' ? '显示全部' : '只看未读'}
             >
               <Circle size={15} fill={filter === 'unread' ? 'currentColor' : 'none'} />
@@ -287,11 +329,7 @@ export default function ArticleList({
       <div
         className="flex-1 overflow-y-auto"
         ref={listContainerRef}
-        onContextMenu={(e) => showMenu(e, buildArticleListHeaderMenu({
-          onFetch: handleFetch,
-          onMarkAllRead: handleMarkAllRead,
-          onToggleMultiSelect,
-        }, canMarkAllRead))}
+        onContextMenu={handleListContextMenu}
       >
         {loading ? (
           <Loading text="正在加载文章列表..." fullHeight />
@@ -304,9 +342,6 @@ export default function ArticleList({
           items.map((item, idx) => (
             <ArticleRow
               key={item.id}
-              ref={(el) => {
-                if (el) itemRefs.current.set(item.id, el);
-              }}
               item={item}
               index={idx}
               selected={selectedId === item.id}
@@ -315,25 +350,13 @@ export default function ArticleList({
               multiSelectMode={multiSelectMode}
               settings={settings}
               highlightKeyword={searchKeyword}
-              onClick={() => {
-                if (multiSelectMode) {
-                  onToggleSelect?.(item.id);
-                } else {
-                  onSelectItem(item);
-                }
-              }}
+              registerRef={registerRef}
+              onActivate={handleActivate}
               onToggleRead={onToggleRead}
-              onToggleStar={() => onToggleStar(item.id, !item.isStarred)}
-              onToggleReadLater={() => onToggleReadLater(item.id, !item.isReadLater)}
-              onToggleSelect={() => onToggleSelect?.(item.id)}
-              onContextMenu={(e) => showMenu(e, buildArticleRowMenu(item, items, !!multiSelectMode, {
-                onToggleMultiSelect,
-                onExport,
-                onToggleRead,
-                onToggleStar,
-                onToggleReadLater,
-                onBatchMarkRead,
-              }))}
+              onToggleStar={onToggleStar}
+              onToggleReadLater={onToggleReadLater}
+              onToggleSelect={handleToggleSelect}
+              onContextMenu={handleRowContextMenu}
             />
           ))
         )}
@@ -349,7 +372,7 @@ export default function ArticleList({
           </span>
           <IconButton
             size="sm"
-            onClick={() => onSelectAll?.(items.map((it) => it.id))}
+            onClick={handleSelectAll}
             title={selectedIds.length === items.length ? '取消全选' : '全选当前列表'}
           >
             {selectedIds.length === items.length ? (
@@ -374,7 +397,46 @@ export default function ArticleList({
   );
 }
 
-const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
+// ---- 纯函数与模块级缓存（避免每行、每次渲染重复创建） ----
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlight(text: string, keyword: string): React.ReactNode {
+  if (!keyword || !text) return text;
+  const parts = text.split(new RegExp(`(${escapeRegExp(keyword)})`, 'gi'));
+  return parts.map((part, i) =>
+    part.toLowerCase() === keyword.toLowerCase() ? (
+      <mark key={i} className="rounded-sm bg-primary-subtle px-0.5 text-primary">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
+// stripHtml 缓存：相同 desc 输入只解析一次，避免每次 render 都用 DOMParser
+const stripHtmlCache = new Map<string, string>();
+
+function stripHtml(html: string): string {
+  const cached = stripHtmlCache.get(html);
+  if (cached !== undefined) return cached;
+  let result: string;
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    result = (doc.body.textContent || '').trim();
+  } catch {
+    result = html.replace(/<[^>]+>/g, '').trim();
+  }
+  // 限制缓存大小，避免无限增长
+  if (stripHtmlCache.size > 500) stripHtmlCache.clear();
+  stripHtmlCache.set(html, result);
+  return result;
+}
+
+interface ArticleRowProps {
   item: Item;
   index: number;
   selected: boolean;
@@ -383,13 +445,16 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
   multiSelectMode: boolean;
   settings: AppSettings;
   highlightKeyword: string;
-  onClick: () => void;
+  registerRef: (id: number, el: HTMLDivElement | null) => void;
+  onActivate: (item: Item) => void;
   onToggleRead: (id: number, read: boolean) => void;
-  onToggleStar: () => void;
-  onToggleReadLater: () => void;
-  onToggleSelect: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
-}>(function ArticleRow({
+  onToggleStar: (id: number, starred: boolean) => void;
+  onToggleReadLater: (id: number, readLater: boolean) => void;
+  onToggleSelect: (id: number) => void;
+  onContextMenu: (e: React.MouseEvent, item: Item) => void;
+}
+
+const ArticleRow = React.memo(function ArticleRow({
   item,
   index,
   selected,
@@ -398,70 +463,36 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
   multiSelectMode,
   settings,
   highlightKeyword,
-  onClick,
+  registerRef,
+  onActivate,
   onToggleRead,
   onToggleStar,
   onToggleReadLater,
   onToggleSelect,
   onContextMenu,
-}, forwardedRef) {
-  const itemRef = React.useRef<HTMLDivElement>(null);
+}: ArticleRowProps) {
+  // 卸载时 React 会以 null 回调，registerRef 内部据此从 Map 中删除，避免只增不删的内存泄漏
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => registerRef(item.id, el),
+    [registerRef, item.id]
+  );
 
-  const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  const highlight = (text: string, keyword: string) => {
-    if (!keyword || !text) return text;
-    const parts = text.split(new RegExp(`(${escapeRegExp(keyword)})`, 'gi'));
-    return parts.map((part, i) =>
-      part.toLowerCase() === keyword.toLowerCase() ? (
-        <mark
-          key={i}
-          className="rounded-sm bg-primary-subtle px-0.5 text-primary"
-        >
-          {part}
-        </mark>
-      ) : (
-        part
-      )
-    );
-  };
-
-  // stripHtml 缓存：相同 desc 输入只解析一次，避免每次 render 都用 DOMParser
-  const stripHtmlCache = React.useRef(new Map<string, string>());
-  const stripHtml = (html: string): string => {
-    const cached = stripHtmlCache.current.get(html);
-    if (cached !== undefined) return cached;
-    let result: string;
-    try {
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      result = (doc.body.textContent || '').trim();
-    } catch {
-      result = html.replace(/<[^>]+>/g, '').trim();
-    }
-    // 限制缓存大小，避免无限增长
-    if (stripHtmlCache.current.size > 500) {
-      stripHtmlCache.current.clear();
-    }
-    stripHtmlCache.current.set(html, result);
-    return result;
-  };
-
-  const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleMouseEnter = () => {
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleMouseEnter = useCallback(() => {
     if (settings.markReadMode !== 'hover' || item.isRead) return;
     hoverTimerRef.current = setTimeout(() => {
       onToggleRead(item.id, true);
     }, settings.markReadHoverDelay);
-  };
-  const handleMouseLeave = () => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-  };
+  }, [item.id, item.isRead, onToggleRead, settings.markReadHoverDelay, settings.markReadMode]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!hoverTimerRef.current) return;
+    clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+  }, []);
 
   // 组件卸载时清理悬停计时器，防止卸载后仍触发标记已读
-  React.useEffect(() => {
+  useEffect(() => {
     return () => {
       if (hoverTimerRef.current) {
         clearTimeout(hoverTimerRef.current);
@@ -470,17 +501,30 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
     };
   }, []);
 
-  const setRefs = React.useCallback(
-    (el: HTMLDivElement | null) => {
-      itemRef.current = el;
-      if (typeof forwardedRef === 'function') {
-        forwardedRef(el);
-      } else if (forwardedRef) {
-        forwardedRef.current = el;
-      }
-    },
-    [forwardedRef]
-  );
+  const handleClick = useCallback(() => onActivate(item), [onActivate, item]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    onActivate(item);
+  }, [onActivate, item]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => onContextMenu(e, item), [onContextMenu, item]);
+
+  const handleToggleSelect = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggleSelect(item.id);
+  }, [onToggleSelect, item.id]);
+
+  const handleToggleStar = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggleStar(item.id, !item.isStarred);
+  }, [onToggleStar, item.id, item.isStarred]);
+
+  const handleToggleReadLater = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggleReadLater(item.id, !item.isReadLater);
+  }, [onToggleReadLater, item.id, item.isReadLater]);
 
   const descText = useMemo(() => {
     if (!item.desc || !settings.listShowPreview) return '';
@@ -510,20 +554,15 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
 
   return (
     <article
-      ref={setRefs}
+      ref={setRef}
       data-item-id={item.id}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick();
-        }
-      }}
+      onKeyDown={handleKeyDown}
       style={{
         animationDelay: `${Math.min(index, 12) * 18}ms`,
         opacity: settings.dimRead && item.isRead ? 0.55 : 1,
@@ -532,6 +571,8 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
       className={cn(
         'group relative cursor-pointer border-b border-border-subtle animate-list-item-in',
         'transition-colors duration-150',
+        // 视口外的条目跳过渲染（浏览器级"虚拟化"），长列表下大幅降低布局与绘制成本
+        '[content-visibility:auto] [contain-intrinsic-size:auto_112px]',
         densityClass,
         selected ? 'bg-active' : 'hover:bg-hover'
       )}
@@ -547,10 +588,7 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
       <div className="flex items-center gap-2">
         {multiSelectMode ? (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleSelect();
-            }}
+            onClick={handleToggleSelect}
             className={cn(
               'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm transition-colors',
               checked ? 'text-primary' : 'text-muted hover:text-secondary'
@@ -602,10 +640,7 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
         </div>
         <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 [&:has(.on)]:opacity-100">
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleReadLater();
-            }}
+            onClick={handleToggleReadLater}
             className={cn(
               'inline-flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-active',
               item.isReadLater ? 'on text-primary' : 'text-muted'
@@ -615,10 +650,7 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
             <Clock size={14} fill={item.isReadLater ? 'currentColor' : 'none'} />
           </button>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleStar();
-            }}
+            onClick={handleToggleStar}
             className={cn(
               'inline-flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-active',
               item.isStarred ? 'on text-primary' : 'text-muted'
@@ -635,4 +667,4 @@ const ArticleRow = React.memo(React.forwardRef<HTMLDivElement, {
       </div>
     </article>
   );
-}));
+});

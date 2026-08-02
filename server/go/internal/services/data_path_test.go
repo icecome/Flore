@@ -35,10 +35,11 @@ func newTestService(t *testing.T) *ReaderService {
 		&models.Folder{},
 		&models.Setting{},
 		&models.FilterRule{},
+		&models.SourceHealth{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
-	return &ReaderService{db: db}
+	return &ReaderService{db: db, indexChan: make(chan int, 256)}
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }

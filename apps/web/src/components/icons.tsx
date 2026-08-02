@@ -73,6 +73,8 @@ export {
   Palette,
   Bell,
   RotateCw,
+  Cog,
+  ArchiveRestore,
 } from 'lucide-react';
 
 import type { LucideProps } from 'lucide-react';
@@ -127,4 +129,6 @@ export {
   Minus as MinusIcon,
   Maximize as MaximizeIcon,
   Copy as CopyIcon,
+  Cog as CogIcon,
+  ArchiveRestore as ArchiveRestoreIcon,
 } from 'lucide-react';

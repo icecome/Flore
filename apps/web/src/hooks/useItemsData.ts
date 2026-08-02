@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction, MutableRefObject } from 'react';
 import type { Item } from '../types';
 import type { AppSettings } from '../utils/settings';
-import { fetchData, withToast } from '../utils/fetchData';
-import { getApi } from '../utils/api.js';
+import { countItems, listItems, searchItems } from '../utils/api';
 import { showToast } from '../utils/toast';
 
 export type ItemFilter = 'all' | 'unread' | 'starred' | 'readLater';
@@ -107,16 +106,13 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       if (settings.hidePrivateInTimeline && selectedSourceId === null && selectedFolderId === null) {
         params.append('hidePrivate', 'true');
       }
-      const res = await fetch(`${getApi()}/items/count?${params.toString()}`, { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { count: number };
-      setTotalCount(typeof data.count === 'number' ? data.count : 0);
+      setTotalCount(await countItems(params, signal));
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch item count:', err);
       showToast('获取文章总数失败');
     }
-  }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline, getApi, showToast]);
+  }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline]);
 
   // 获取稍后阅读未读数
   const fetchReadLaterCount = useCallback(async (signal?: AbortSignal) => {
@@ -126,16 +122,13 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       if (settings.hidePrivateInTimeline) {
         params.append('hidePrivate', 'true');
       }
-      const res = await fetch(`${getApi()}/items/count?${params.toString()}`, { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { count: number };
-      setReadLaterCount(typeof data.count === 'number' ? data.count : 0);
+      setReadLaterCount(await countItems(params, signal));
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch read later count:', err);
       showToast('获取稍后阅读数失败');
     }
-  }, [settings.hidePrivateInTimeline, getApi, showToast]);
+  }, [settings.hidePrivateInTimeline]);
 
   // 获取文章列表（分页）
   const fetchItems = useCallback(async (signal?: AbortSignal, opts?: { append?: boolean }) => {
@@ -148,9 +141,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
         offsetRef.current = 0;
       }
       params.set('offset', String(offsetRef.current));
-      const res = await fetch(`${getApi()}/items?${params.toString()}`, { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Item[];
+      const data = await listItems(params, signal);
       const arr = Array.isArray(data) ? data : [];
       if (append) {
         setItems(prev => [...prev, ...arr]);
@@ -170,7 +161,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       setLoadingItems(false);
       setLoadingMore(false);
     }
-  }, [buildItemParams, getApi, showToast, PAGE_SIZE]);
+  }, [buildItemParams, PAGE_SIZE]);
 
   // 加载下一页（滚动触底或点击"加载更多"时调用）
   const loadMore = useCallback(async (signal?: AbortSignal) => {
@@ -185,9 +176,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       const params = new URLSearchParams();
       params.append('q', keyword);
       params.append('limit', '50');
-      const res = await fetch(`${getApi()}/items/search?${params.toString()}`, { signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Item[];
+      const data = await searchItems(params, signal);
       setItems(Array.isArray(data) ? data : []);
       setTotalCount(Array.isArray(data) ? data.length : 0);
     } catch (err) {
@@ -199,7 +188,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     } finally {
       setLoadingItems(false);
     }
-  }, [getApi, showToast]);
+  }, []);
 
   // 当选择源、文件夹或筛选条件变化时重新加载文章与计数
   useEffect(() => {
@@ -215,7 +204,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       setSelectedItem(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSearchMode, searchKeyword, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
+  }, [isSearchMode, searchKeyword, filter, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
 
   return {
     items,

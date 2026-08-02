@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -236,9 +237,12 @@ type BackupEntry struct {
 	Name    string `json:"name"`
 	Size    int64  `json:"size"`
 	ModTime string `json:"modTime"`
+	HasDB   bool   `json:"hasDb"`
+	HasCfg  bool   `json:"hasCfg"`
+	HasOpm  bool   `json:"hasOpml"`
 }
 
-// CreateCompressedBackup 创建压缩备份（VACUUM INTO + ZIP）
+// CreateCompressedBackup 创建全量压缩备份（含数据库、配置、订阅源）
 func (s *ReaderService) CreateCompressedBackup() (string, error) {
 	dbPath := database.DBPath()
 	backupDir := getBackupDir(dbPath)
@@ -255,23 +259,39 @@ func (s *ReaderService) CreateCompressedBackup() (string, error) {
 	}
 	defer os.Remove(snapshotPath)
 
-	// 压缩为 ZIP
+	// 导出配置（Settings 表）
+	cfgJSON, err := s.exportSettingsJSON()
+	if err != nil {
+		slog.Warn("failed to export settings for backup", "error", err)
+	}
+
+	// 导出订阅源（OPML）
+	opmlXML, err := s.ExportOPML()
+	if err != nil {
+		slog.Warn("failed to export OPML for backup", "error", err)
+	}
+
+	// 打包为 ZIP
 	zipName := fmt.Sprintf("backup-%s.zip", timestamp)
 	zipPath := filepath.Join(backupDir, zipName)
-	if err := compressToZip(snapshotPath, zipPath); err != nil {
+	if err := compressToZipFull(snapshotPath, filepath.Base(snapshotPath), cfgJSON, opmlXML, zipPath); err != nil {
 		return "", fmt.Errorf("failed to compress backup: %w", err)
 	}
 
-	// 统一清理：手动与自动备份路径共用同一保留策略，消除手动备份只增不删的问题（M-R1）
-	maxKeep := s.GetSettingInt("backupMaxKeep", 10)
-	maxDays := s.GetSettingInt("backupMaxDays", 30)
-	if deleted, err := s.CleanupBackups(maxKeep, maxDays); err != nil {
-		slog.Warn("cleanup after backup failed", "error", err)
-	} else if deleted > 0 {
-		slog.Info("cleaned expired backups after create", "deleted", deleted)
-	}
-
 	return zipName, nil
+}
+
+// exportSettingsJSON 从数据库读取所有设置项并序列化为 JSON 字符串
+func (s *ReaderService) exportSettingsJSON() (string, error) {
+	settings, err := s.GetAllSettings()
+	if err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // compressToZip 将单个文件压缩为 ZIP
@@ -301,6 +321,58 @@ func compressToZip(srcPath, dstPath string) error {
 	return outFile.Sync()
 }
 
+// compressToZipFull 将数据库 + 配置 + OPML 打包为全量 ZIP 备份
+func compressToZipFull(dbPath, dbName string, settingsJSON, opmlXML string, dstPath string) error {
+	outFile, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	zw := zip.NewWriter(outFile)
+
+	// 写入数据库文件
+	dbData, err := os.ReadFile(dbPath)
+	if err != nil {
+		zw.Close()
+		return fmt.Errorf("failed to read database: %w", err)
+	}
+	if fw, err := zw.Create(dbName); err != nil {
+		zw.Close()
+		return err
+	} else if _, err := fw.Write(dbData); err != nil {
+		zw.Close()
+		return err
+	}
+
+	// 写入配置（如存在）
+	if settingsJSON != "" {
+		if fw, err := zw.Create("settings.json"); err != nil {
+			zw.Close()
+			return err
+		} else if _, err := fw.Write([]byte(settingsJSON)); err != nil {
+			zw.Close()
+			return err
+		}
+	}
+
+	// 写入订阅源（如存在）
+	if opmlXML != "" {
+		if fw, err := zw.Create("subscriptions.opml"); err != nil {
+			zw.Close()
+			return err
+		} else if _, err := fw.Write([]byte(opmlXML)); err != nil {
+			zw.Close()
+			return err
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	return outFile.Sync()
+}
+
 // ListBackups 列出备份目录中的所有 ZIP 文件
 func (s *ReaderService) ListBackups() ([]BackupEntry, error) {
 	dbPath := database.DBPath()
@@ -323,10 +395,14 @@ func (s *ReaderService) ListBackups() ([]BackupEntry, error) {
 		if err != nil {
 			continue
 		}
+		contents, _ := s.GetBackupContents(e.Name())
 		backups = append(backups, BackupEntry{
 			Name:    e.Name(),
 			Size:    info.Size(),
 			ModTime: info.ModTime().Format("2006-01-02 15:04:05"),
+			HasDB:   contents.HasDB,
+			HasCfg:  contents.HasCfg,
+			HasOpm:  contents.HasOpm,
 		})
 	}
 
@@ -336,6 +412,48 @@ func (s *ReaderService) ListBackups() ([]BackupEntry, error) {
 	})
 
 	return backups, nil
+}
+
+// BackupContents 备份文件内容清单
+type BackupContents struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	HasDB  bool   `json:"hasDb"`
+	HasCfg bool   `json:"hasCfg"`
+	HasOpm bool   `json:"hasOpml"`
+}
+
+// GetBackupContents 读取备份 ZIP 内容清单，不解压
+func (s *ReaderService) GetBackupContents(name string) (*BackupContents, error) {
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || !strings.HasSuffix(name, ".zip") {
+		return nil, fmt.Errorf("invalid backup name")
+	}
+	zipPath := filepath.Join(getBackupDir(database.DBPath()), name)
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open backup: %w", err)
+	}
+	defer r.Close()
+
+	info, err := os.Stat(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	contents := &BackupContents{
+		Name: name,
+		Size: info.Size(),
+	}
+	for _, f := range r.File {
+		switch {
+		case strings.HasSuffix(strings.ToLower(f.Name), ".db"):
+			contents.HasDB = true
+		case strings.HasSuffix(f.Name, "settings.json"):
+			contents.HasCfg = true
+		case strings.HasSuffix(f.Name, ".opml"):
+			contents.HasOpm = true
+		}
+	}
+	return contents, nil
 }
 
 // DeleteBackup 删除指定备份文件
@@ -353,6 +471,107 @@ func (s *ReaderService) DeleteBackup(name string) error {
 
 	fullPath := filepath.Join(backupDir, name)
 	return os.Remove(fullPath)
+}
+
+// GetBackupContentsFromPath 从指定 ZIP 文件路径读取内容清单（用于导入外部备份）
+func (s *ReaderService) GetBackupContentsFromPath(zipPath string) (*BackupContents, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open backup: %w", err)
+	}
+	defer r.Close()
+
+	info, err := os.Stat(zipPath)
+	if err != nil {
+		return nil, err
+	}
+
+	contents := &BackupContents{Size: info.Size()}
+	for _, f := range r.File {
+		switch {
+		case strings.HasSuffix(strings.ToLower(f.Name), ".db"):
+			contents.HasDB = true
+		case strings.HasSuffix(f.Name, "settings.json"):
+			contents.HasCfg = true
+		case strings.HasSuffix(f.Name, ".opml"):
+			contents.HasOpm = true // 修复：正确使用 HasOpm 字段名
+		}
+	}
+	return contents, nil
+}
+
+// RestoreConfigFromBackup 从备份 ZIP 中解压 settings.json 并恢复设置项
+func (s *ReaderService) RestoreConfigFromBackup(name string) error {
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || !strings.HasSuffix(name, ".zip") {
+		return fmt.Errorf("invalid backup name")
+	}
+	zipPath := filepath.Join(getBackupDir(database.DBPath()), name)
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to open backup: %w", err)
+	}
+	defer r.Close()
+
+	var settingsData []byte
+	for _, f := range r.File {
+		if f.Name == "settings.json" {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			settingsData, err = io.ReadAll(rc)
+			if err != nil {
+				rc.Close()
+				continue
+			}
+			rc.Close()
+			break
+		}
+	}
+	if len(settingsData) == 0 {
+		return fmt.Errorf("no settings.json found in backup")
+	}
+
+	var settings map[string]string
+	if err := json.Unmarshal(settingsData, &settings); err != nil {
+		return fmt.Errorf("failed to parse settings.json: %w", err)
+	}
+	return s.UpdateSettings(settings)
+}
+
+// RestoreOPMLFromBackup 从备份 ZIP 中解压 subscriptions.opml 并恢复订阅源
+func (s *ReaderService) RestoreOPMLFromBackup(name string) error {
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || !strings.HasSuffix(name, ".zip") {
+		return fmt.Errorf("invalid backup name")
+	}
+	zipPath := filepath.Join(getBackupDir(database.DBPath()), name)
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to open backup: %w", err)
+	}
+	defer r.Close()
+
+	var opmlData string
+	for _, f := range r.File {
+		if strings.HasSuffix(f.Name, ".opml") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			b, err := io.ReadAll(rc)
+			if err != nil {
+				rc.Close()
+				continue
+			}
+			rc.Close()
+			opmlData = string(b)
+			break
+		}
+	}
+	if opmlData == "" {
+		return fmt.Errorf("no opml file found in backup")
+	}
+	return s.ImportOPML(opmlData)
 }
 
 // CleanupBackups 按保留策略清理过期备份

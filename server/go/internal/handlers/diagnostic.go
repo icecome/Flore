@@ -21,17 +21,20 @@ import (
 
 // DiagnosticItem represents a single item in the diagnostic package
 type DiagnosticItem struct {
-	Key   string `json:"key"`
-	Name  string `json:"name"`
-	Type  string `json:"type"` // "log", "snapshot", "stats"
-	Checked bool  `json:"checked"`
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	Type    string `json:"type"` // "log", "snapshot", "stats"
+	Checked bool   `json:"checked"`
 }
 
 // GenerateDiagnosticPackage handles the diagnostic package generation request
 func (h *ReaderHandler) GenerateDiagnosticPackage(c *gin.Context) {
-	outputDir := c.Query("output")
-	if outputDir == "" {
-		outputDir = os.TempDir()
+	// 安全：仅允许写入临时目录，避免用户可控 output 参数导致任意目录写入（审查 B-08）
+	outputDir := os.TempDir()
+	if raw := c.Query("output"); raw != "" {
+		if cleaned := filepath.Clean(raw); strings.HasPrefix(cleaned, os.TempDir()) {
+			outputDir = cleaned
+		}
 	}
 
 	itemKeys := c.Request.URL.Query()["items"]
@@ -100,14 +103,16 @@ func generateDBSnapshot(svc *services.ReaderService) []byte {
 
 	// Source statistics with per-source details
 	type sourceStat struct {
-		ID          int64 `json:"id"`
-		Host        string `json:"host"`
-		FailCount   int   `json:"failCount"`
-		ItemCount   int64 `json:"itemCount"`
+		ID        int64  `json:"id"`
+		Host      string `json:"host"`
+		FailCount int    `json:"failCount"`
+		ItemCount int64  `json:"itemCount"`
 	}
 	var sources []sourceStat
-	db.Raw("SELECT id, url, COALESCE(fail_count, 0) as fail_count, (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id) as item_count FROM sources s").
-		Scan(&sources)
+	if err := db.Raw("SELECT id, url, COALESCE(fail_count, 0) as fail_count, (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id) as item_count FROM sources s").
+		Scan(&sources).Error; err != nil {
+		slog.Warn("diagnostic: failed to scan source stats", "error", err)
+	}
 
 	snapshot["sourceCount"] = len(sources)
 	snapshot["sources"] = sources
@@ -119,10 +124,18 @@ func generateDBSnapshot(svc *services.ReaderService) []byte {
 		Read    int64 `json:"read"`
 		Starred int64 `json:"starred"`
 	}
-	db.Model(&struct{}{}).Table("items").Count(&itemStats.Total)
-	db.Model(&struct{}{}).Table("items").Where("is_read = ?", false).Count(&itemStats.Unread)
-	db.Model(&struct{}{}).Table("items").Where("is_read = ?", true).Count(&itemStats.Read)
-	db.Model(&struct{}{}).Table("items").Where("is_starred = ?", true).Count(&itemStats.Starred)
+	if err := db.Model(&struct{}{}).Table("items").Count(&itemStats.Total).Error; err != nil {
+		slog.Warn("diagnostic: count total failed", "error", err)
+	}
+	if err := db.Model(&struct{}{}).Table("items").Where("is_read = ?", false).Count(&itemStats.Unread).Error; err != nil {
+		slog.Warn("diagnostic: count unread failed", "error", err)
+	}
+	if err := db.Model(&struct{}{}).Table("items").Where("is_read = ?", true).Count(&itemStats.Read).Error; err != nil {
+		slog.Warn("diagnostic: count read failed", "error", err)
+	}
+	if err := db.Model(&struct{}{}).Table("items").Where("is_starred = ?", true).Count(&itemStats.Starred).Error; err != nil {
+		slog.Warn("diagnostic: count starred failed", "error", err)
+	}
 	snapshot["items"] = itemStats
 
 	// Recent errors from backend log
@@ -142,7 +155,10 @@ func readLastLines(filename string, lines int) []byte {
 	}
 	defer file.Close()
 
-	content, _ := io.ReadAll(file)
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return []byte{}
+	}
 	linesSlice := strings.Split(string(content), "\n")
 	start := 0
 	if len(linesSlice) > lines {

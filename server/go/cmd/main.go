@@ -68,7 +68,6 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 	slog.Info("backend log file", "path", logFile)
-	slog.Info("backend log file", "path", logFile)
 
 	if err := database.Init(); err != nil {
 		slog.Error("failed to initialize database", "error", err)

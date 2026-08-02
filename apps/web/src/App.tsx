@@ -20,7 +20,25 @@ import type { AppSettings } from './utils/settings';
 import { loadSettings, loadSettingsFromServer, saveSettings, applyAccentColor, migrateLegacySettingsIfNeeded } from './utils/settings';
 import { showToast } from './utils/toast';
 
-import { getApi, downloadBlob, openExternal } from './utils/api.js';
+import {
+  downloadBlob,
+  openExternal,
+  saveBlobAsFile,
+  exportItems,
+  setItemRead,
+  setItemStarred,
+  setItemReadLater,
+  markAllRead,
+  markItemsRead,
+  createSource,
+  updateSource,
+  deleteSource,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  clearFolderSources,
+  importOPML,
+} from './utils/api';
 import { useSourcesData } from './hooks/useSourcesData';
 import { useItemsData, type ItemFilter } from './hooks/useItemsData';
 import { useNotification } from './hooks/useNotification';
@@ -150,83 +168,72 @@ function App() {
   }, [items]);
 
   // 搜索
-  const handleSearch = (keyword: string) => {
+  const handleSearch = useCallback((keyword: string) => {
     setSearchKeyword(keyword);
     setIsSearchMode(true);
     setSelectedSourceId(null);
     setSelectedFolderId(null);
     setFilter('all');
-  };
+  }, [setSearchKeyword, setIsSearchMode]);
 
   // 清空搜索
-  const handleClearSearch = () => {
+  const handleClearSearch = useCallback(() => {
     setSearchKeyword('');
     setIsSearchMode(false);
-  };
+  }, [setSearchKeyword, setIsSearchMode]);
 
   // 切换多选模式
-  const handleToggleMultiSelect = () => {
+  const handleToggleMultiSelect = useCallback(() => {
     setMultiSelectMode((v) => !v);
     setSelectedIds([]);
-  };
+  }, []);
 
   // 移动端返回文章列表
-  const handleBackToList = () => {
+  const handleBackToList = useCallback(() => {
     setMobileView('list');
     setSelectedItem(null);
-  };
+  }, []);
 
   // 切换文章选中
-  const handleToggleSelect = (id: number) => {
+  const handleToggleSelect = useCallback((id: number) => {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
     );
-  };
-
-  // 全选当前列表文章
-  const handleSelectAll = (ids: number[]) => {
-    setSelectedIds(ids);
-  };
-
-  // 批量导出文章
-  const triggerBlobDownload = useCallback((blob: Blob, format: 'markdown' | 'json') => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `articles-${new Date().toISOString().slice(0, 10)}.${format === 'json' ? 'json' : 'zip'}`;
-    a.click();
-    URL.revokeObjectURL(url);
   }, []);
 
-  const handleExportArticles = async (scope: ExportScope, format: 'markdown' | 'json') => {
-    let res: Response;
+  // 全选当前列表文章
+  const handleSelectAll = useCallback((ids: number[]) => {
+    setSelectedIds(ids);
+  }, []);
+
+  // 批量导出文章
+  const handleExportArticles = useCallback(async (scope: ExportScope, format: 'markdown' | 'json') => {
     try {
-      res = await fetch(`${getApi()}/items/export?format=${format}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scope),
-      });
+      const blob = await exportItems(scope, format);
+      const ext = format === 'json' ? 'json' : 'zip';
+      saveBlobAsFile(blob, `articles-${new Date().toISOString().slice(0, 10)}.${ext}`);
     } catch (err) {
       console.error('Failed to export articles:', err);
-      showToast('导出失败');
-      return;
+      showToast(err instanceof Error ? err.message : '导出失败');
     }
-    if (!res.ok) {
-      const err = (await res.json().catch(() => ({ error: '导出失败' }))) as { error: string };
-      console.error('Failed to export articles:', err);
-      showToast(err.error || '导出失败');
-      return;
-    }
-    try {
-      triggerBlobDownload(await res.blob(), format);
-    } catch (err) {
-      console.error('Failed to export articles:', err);
-      showToast('导出失败');
-    }
-  };
+  }, []);
+
+  const updateItemReadState = useCallback((id: number, read: boolean) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isRead: read } : i)));
+  }, [setItems]);
+
+  const updateSourceUnreadCount = useCallback((sourceId: number, delta: number) => {
+    setSources((prev) =>
+      prev.map((s) =>
+        s.id === sourceId
+          ? { ...s, unreadCount: Math.max(0, (s.unreadCount || 0) + delta) }
+          : s
+      )
+    );
+  }, [setSources]);
 
   // 选择文章时标记为已读
-  const handleSelectItem = async (item: Item) => {
+  const handleSelectItem = useCallback(async (item: Item) => {
     // 浏览器打开模式：直接在外部浏览器打开，不进入阅读器
     if (settings.openArticleMode === 'browser') {
       if (item.link) openExternal(item.link);
@@ -236,103 +243,71 @@ function App() {
 
     setSelectedItem(item);
     setFocusedItemId(item.id);
-    if (isMobile) {
-      setMobileView('reader');
-    }
+    if (isMobile) setMobileView('reader');
     setLoadingReader(true);
 
     if (!item.isRead) {
       try {
-        const readRes = await fetch(`${getApi()}/items/${item.id}/read`, { method: 'POST' });
-        if (!readRes.ok) throw new Error(`HTTP ${readRes.status}`);
-        setItems((prev) =>
-          prev.map((i) => (i.id === item.id ? { ...i, isRead: true } : i))
-        );
-        setSources((prev) =>
-          prev.map((s) =>
-            s.id === item.sourceId
-              ? { ...s, unreadCount: Math.max(0, (s.unreadCount || 0) - 1) }
-              : s
-          )
-        );
+        await setItemRead(item.id, true);
+        updateItemReadState(item.id, true);
+        updateSourceUnreadCount(item.sourceId, -1);
       } catch (err) {
         console.error('Failed to mark read:', err);
+        showToast('标记已读失败');
       }
     }
 
     setLoadingReader(false);
-  };
+  }, [settings.openArticleMode, isMobile, updateItemReadState, updateSourceUnreadCount]);
 
   // 切换收藏
-  const handleToggleStar = async (id: number, starred: boolean) => {
-    const endpoint = starred ? 'star' : 'unstar';
+  const handleToggleStar = useCallback(async (id: number, starred: boolean) => {
     try {
-      const res = await fetch(`${getApi()}/items/${id}/${endpoint}`, { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await setItemStarred(id, starred);
     } catch (err) {
       console.error('Failed to toggle star:', err);
       showToast(starred ? '收藏失败' : '取消收藏失败');
       return;
     }
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isStarred: starred } : i)));
-    if (selectedItem?.id === id) {
-      setSelectedItem((prev) => (prev ? { ...prev, isStarred: starred } : null));
-    }
-  };
+    setSelectedItem((prev) => (prev && prev.id === id ? { ...prev, isStarred: starred } : prev));
+  }, [setItems]);
 
   // 切换稍后阅读
-  const handleToggleReadLater = async (id: number, readLater: boolean) => {
-    const endpoint = readLater ? 'read-later' : 'unread-later';
+  const handleToggleReadLater = useCallback(async (id: number, readLater: boolean) => {
     try {
-      const res = await fetch(`${getApi()}/items/${id}/${endpoint}`, { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await setItemReadLater(id, readLater);
     } catch (err) {
       console.error('Failed to toggle read later:', err);
       showToast(readLater ? '添加稍后阅读失败' : '取消稍后阅读失败');
       return;
     }
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isReadLater: readLater } : i)));
-    if (selectedItem?.id === id) {
-      setSelectedItem((prev) => (prev ? { ...prev, isReadLater: readLater } : null));
-    }
-  };
+    setSelectedItem((prev) => (prev && prev.id === id ? { ...prev, isReadLater: readLater } : prev));
+  }, [setItems]);
 
-  // 切换已读（阅读区按钮）
-  const handleToggleRead = async (id: number, read: boolean) => {
-    const prevItem = items.find((i) => i.id === id);
+  // 切换已读（阅读区按钮）；items 从 ref 读取，保证回调引用稳定
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  const handleToggleRead = useCallback(async (id: number, read: boolean) => {
+    const prevItem = itemsRef.current.find((i) => i.id === id);
     const wasRead = prevItem?.isRead ?? true;
     const sourceId = prevItem?.sourceId;
 
     try {
-      const res = await fetch(`${getApi()}/items/${id}/${read ? 'read' : 'unread'}`, { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await setItemRead(id, read);
     } catch (err) {
       console.error('Failed to toggle read:', err);
       showToast(read ? '标记已读失败' : '标记未读失败');
       return;
     }
     updateItemReadState(id, read);
-    if (selectedItem?.id === id) {
-      setSelectedItem((prev) => (prev ? { ...prev, isRead: read } : null));
-    }
+    setSelectedItem((prev) => (prev && prev.id === id ? { ...prev, isRead: read } : prev));
     if (sourceId !== undefined && read !== wasRead) {
       updateSourceUnreadCount(sourceId, read ? -1 : 1);
     }
-  };
-
-  const updateItemReadState = (id: number, read: boolean) => {
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isRead: read } : i)));
-  };
-
-  const updateSourceUnreadCount = (sourceId: number, delta: number) => {
-    setSources((prev) =>
-      prev.map((s) =>
-        s.id === sourceId
-          ? { ...s, unreadCount: Math.max(0, (s.unreadCount || 0) + delta) }
-          : s
-      )
-    );
-  };
+  }, [updateItemReadState, updateSourceUnreadCount]);
 
   const isAnyModalOpen = () =>
     showAddModal ||
@@ -506,20 +481,17 @@ function App() {
     }
   };
 
-  // 查找或创建文件夹（用于自动分组）
-  const ensureFolder = async (name: string): Promise<number> => {
-    const existing = folders.find((f) => f.name === name);
+  // 查找或创建文件夹（用于自动分组）；folders 从 ref 读取，保持回调引用稳定
+  const foldersRef = useRef(folders);
+  foldersRef.current = folders;
+
+  const ensureFolder = useCallback(async (name: string): Promise<number> => {
+    const existing = foldersRef.current.find((f) => f.name === name);
     if (existing) return existing.id;
-    const res = await fetch(`${getApi()}/folders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) throw new Error('创建文件夹失败');
-    const created: { id: number } = await res.json();
-    await fetchFolders();
+    const created = await createFolder(name);
+    await fetchFoldersRef.current();
     return created.id;
-  };
+  }, []);
 
   // 添加订阅源
   const buildSourcePayload = useCallback(async (data: SourceFormData): Promise<SourceFormData> => {
@@ -530,7 +502,7 @@ function App() {
     return payload;
   }, [settings.autoGroup, ensureFolder]);
 
-  const handleAddSource = async (data: SourceFormData) => {
+  const handleAddSource = useCallback(async (data: SourceFormData) => {
     let payload: SourceFormData;
     try {
       payload = await buildSourcePayload(data);
@@ -540,198 +512,146 @@ function App() {
       return;
     }
     try {
-      const res = await fetch(`${getApi()}/sources/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({ error: '创建失败' }))) as { error: string };
-        showToast(err.error || '创建失败');
-        return;
-      }
+      await createSource(payload);
     } catch (err) {
       console.error('Failed to create source:', err);
-      showToast('创建失败');
+      showToast(err instanceof Error ? err.message : '创建失败');
       return;
     }
     setShowAddModal(false);
-    await fetchSources();
-  };
+    await fetchSourcesRef.current();
+  }, [buildSourcePayload]);
 
   // 创建文件夹
-  const handleCreateFolder = () => {
+  const handleCreateFolder = useCallback(() => {
     setCreateFolderName('');
     setShowCreateFolder(true);
-  };
+  }, []);
 
-  const handleCreateFolderSubmit = async () => {
+  const handleCreateFolderSubmit = useCallback(async () => {
     const name = createFolderName.trim();
     setShowCreateFolder(false);
     if (!name) return;
     try {
-      const res = await fetch(`${getApi()}/folders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      if (!res.ok) throw new Error('创建失败');
-      await fetchFolders();
+      await createFolder(name);
+      await fetchFoldersRef.current();
     } catch (err) {
       console.error('Failed to create folder:', err);
       showToast('创建文件夹失败');
     }
-  };
+  }, [createFolderName]);
 
   // 重命名文件夹
-  const handleRenameFolder = async (value: string) => {
+  const handleRenameFolder = useCallback(async (value: string) => {
     if (!renameTarget || renameTarget.type !== 'folder') return;
     try {
-      const res = await fetch(`${getApi()}/folders/${renameTarget.item.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: value }),
-      });
-      if (!res.ok) throw new Error('重命名失败');
-      await fetchFolders();
+      await renameFolder(renameTarget.item.id, value);
+      await fetchFoldersRef.current();
     } catch (err) {
       console.error('Failed to rename folder:', err);
       showToast('重命名失败');
     }
-  };
+  }, [renameTarget]);
 
   // 删除文件夹
-  const handleDeleteFolder = (id: number) => {
+  const handleDeleteFolder = useCallback((id: number) => {
     setConfirmAction({
       message: '确定删除该文件夹？文件夹内的订阅源将变为未分类。',
       danger: true,
       onConfirm: async () => {
         setConfirmAction(null);
         try {
-          const res = await fetch(`${getApi()}/folders/${id}`, { method: 'DELETE' });
-          if (!res.ok) throw new Error('删除失败');
-          if (selectedFolderId === id) {
-            setSelectedFolderId(null);
-          }
-          await Promise.all([fetchFolders(), fetchSources()]);
+          await deleteFolder(id);
+          setSelectedFolderId((prev) => (prev === id ? null : prev));
+          await Promise.all([fetchFoldersRef.current(), fetchSourcesRef.current()]);
         } catch (err) {
           console.error('Failed to delete folder:', err);
           showToast('删除失败');
         }
       },
     });
-  };
+  }, []);
 
   // 重命名订阅源
-  const handleRenameSource = async (value: string) => {
+  const handleRenameSource = useCallback(async (value: string) => {
     if (!renameTarget || renameTarget.type !== 'source') return;
     try {
-      const res = await fetch(`${getApi()}/sources/${renameTarget.item.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: value }),
-      });
-      if (!res.ok) throw new Error('重命名失败');
-      await fetchSources();
+      await updateSource(renameTarget.item.id, { name: value });
+      await fetchSourcesRef.current();
     } catch (err) {
       console.error('Failed to rename source:', err);
       showToast('重命名失败');
     }
-  };
+  }, [renameTarget]);
 
   // 移动订阅源
-  const handleMoveSource = async (sourceId: number, folderId: number | null) => {
+  const handleMoveSource = useCallback(async (sourceId: number, folderId: number | null) => {
     try {
-      const res = await fetch(`${getApi()}/sources/${sourceId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId }),
-      });
-      if (!res.ok) throw new Error('移动失败');
+      await updateSource(sourceId, { folderId });
     } catch (err) {
       console.error('Failed to move source:', err);
       showToast('移动失败');
       return;
     }
-    await fetchSources();
-  };
+    await fetchSourcesRef.current();
+  }, []);
 
-  const executeDeleteSource = async (id: number) => {
-    try {
-      const res = await fetch(`${getApi()}/sources/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('删除失败');
-    } catch (err) {
-      console.error('Failed to delete source:', err);
-      showToast('删除失败');
-      return;
-    }
-    if (selectedSourceId === id) setSelectedSourceId(null);
-    await refreshSourceStructure();
-  };
-
-  const handleDeleteSource = (id: number) => {
+  const handleDeleteSource = useCallback((id: number) => {
     setConfirmAction({
       message: '确定删除该订阅源？相关文章也将被删除。',
       danger: true,
       onConfirm: async () => {
         setConfirmAction(null);
-        await executeDeleteSource(id);
+        try {
+          await deleteSource(id);
+        } catch (err) {
+          console.error('Failed to delete source:', err);
+          showToast('删除失败');
+          return;
+        }
+        setSelectedSourceId((prev) => (prev === id ? null : prev));
+        await refreshSourceStructure();
       },
     });
-  };
+  }, [refreshSourceStructure]);
 
   // 全部标为已读（支持全部文章 / 文件夹 / 单个订阅源）
-  const handleMarkAllRead = async (scope: { sourceId?: number; folderId?: number }) => {
+  const handleMarkAllRead = useCallback(async (scope: { sourceId?: number; folderId?: number }) => {
     try {
-      const res = await fetch(`${getApi()}/items/read-all`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scope),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await Promise.all([fetchSources(), fetchItems(), fetchItemCount()]);
+      await markAllRead(scope);
+      await Promise.all([fetchSourcesRef.current(), fetchItemsRef.current(), fetchItemCountRef.current()]);
     } catch (err) {
       console.error('Failed to mark all read:', err);
       showToast('标记失败');
     }
-  };
+  }, []);
 
   // 批量标记已读/未读（按文章 ID 列表）
-  const handleBatchMarkRead = async (ids: number[], read: boolean) => {
+  const handleBatchMarkRead = useCallback(async (ids: number[], read: boolean) => {
     if (ids.length === 0) return;
     try {
-      const res = await fetch(`${getApi()}/items/mark-read`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, read }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await markItemsRead(ids, read);
     } catch (err) {
       console.error('Failed to batch mark read:', err);
       showToast('批量标记失败');
       return;
     }
-    await Promise.all([fetchSources(), fetchItems(), fetchItemCount()]);
-  };
+    await Promise.all([fetchSourcesRef.current(), fetchItemsRef.current(), fetchItemCountRef.current()]);
+  }, []);
 
   // 将订阅源移出当前文件夹
-  const handleRemoveFromFolder = async (sourceId: number) => {
+  const handleRemoveFromFolder = useCallback(async (sourceId: number) => {
     try {
-      const res = await fetch(`${getApi()}/sources/${sourceId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId: null }),
-      });
-      if (!res.ok) throw new Error('移出文件夹失败');
-      await fetchSources();
+      await updateSource(sourceId, { folderId: null });
+      await fetchSourcesRef.current();
     } catch (err) {
       console.error('Failed to remove source from folder:', err);
       showToast('移出文件夹失败');
     }
-  };
+  }, []);
 
   // 编辑订阅源（名称 + URL + 文件夹 + 私密 + 时间线隐藏）
-  const handleEditSource = async (params: {
+  const handleEditSource = useCallback(async (params: {
     sourceId: number;
     name: string;
     url: string;
@@ -739,63 +659,45 @@ function App() {
     isPrivate: boolean;
     hideInTimeline: boolean;
   }) => {
-    const body = {
-      name: params.name.trim(),
-      url: params.url.trim(),
-      folderId: params.folderId,
-      isPrivate: params.isPrivate,
-      hideInTimeline: params.hideInTimeline,
-    };
     try {
-      const res = await fetch(`${getApi()}/sources/${params.sourceId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      await updateSource(params.sourceId, {
+        name: params.name.trim(),
+        url: params.url.trim(),
+        folderId: params.folderId,
+        isPrivate: params.isPrivate,
+        hideInTimeline: params.hideInTimeline,
       });
-      if (!res.ok) throw new Error('编辑失败');
     } catch (err) {
       console.error('Failed to edit source:', err);
       showToast('编辑订阅源失败');
       return;
     }
     setEditSource(null);
-    await Promise.all([fetchSources(), fetchItems(), fetchItemCount()]);
-  };
+    await Promise.all([fetchSourcesRef.current(), fetchItemsRef.current(), fetchItemCountRef.current()]);
+  }, []);
 
   // 清空文件夹内的所有订阅源（保留文件夹本身）
-  const handleClearFolder = (folderId: number) => {
+  const handleClearFolder = useCallback((folderId: number) => {
     setConfirmAction({
       message: '确定清空该文件夹内的所有订阅源？订阅源将变为未分类，文件夹本身会保留。',
       danger: true,
       onConfirm: async () => {
         setConfirmAction(null);
         try {
-          const res = await fetch(`${getApi()}/folders/${folderId}/clear`, {
-            method: 'POST',
-          });
-          if (!res.ok) throw new Error('清空分组失败');
-          await fetchSources();
+          await clearFolderSources(folderId);
+          await fetchSourcesRef.current();
         } catch (err) {
           console.error('Failed to clear folder:', err);
           showToast('清空分组失败');
         }
       },
     });
-  };
+  }, []);
 
-  // 导入 OPML
-  const handleImportOPML = async (xml: string) => {
+  // 导入 OPML（错误向上抛给 ImportOPMLModal 展示）
+  const handleImportOPML = useCallback(async (xml: string) => {
     try {
-      const res = await fetch(`${getApi()}/opml/import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/xml' },
-        body: xml,
-      });
-      if (!res.ok) {
-        const errData = (await res.json().catch(() => ({ error: '导入失败' }))) as { error: string };
-        throw new Error(errData.error || '导入失败');
-      }
-      await Promise.all([fetchFolders(), fetchSources()]);
+      await importOPML(xml);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '导入失败';
       // 如果错误消息是 internal_server_error，给出更友好的提示
@@ -804,17 +706,18 @@ function App() {
       }
       throw err;
     }
-  };
+    await Promise.all([fetchFoldersRef.current(), fetchSourcesRef.current()]);
+  }, []);
 
   // 导出 OPML
-  const handleExportOPML = async () => {
+  const handleExportOPML = useCallback(async () => {
     try {
       await downloadBlob('/opml/export', 'subscriptions.opml');
     } catch (err) {
       console.error('Failed to export OPML:', err);
       showToast('导出失败');
     }
-  };
+  }, []);
 
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden font-sans bg-canvas">

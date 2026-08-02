@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { isDesktop, getDesktopApp } from '../utils/api.js';
+import { showToast } from '../utils/toast';
 import { RssIcon, MinusIcon, MaximizeIcon, CopyIcon, X } from './icons';
 
 type Runtime = {
@@ -34,7 +35,9 @@ function useWindowDrag(desktop: boolean, maximized: boolean, runtime: Runtime | 
         winX: pos.x,
         winY: pos.y,
       };
-    } catch {
+    } catch (err) {
+      // 取不到窗口坐标只能放弃本次拖动，无需打扰用户
+      console.error('TitleBar WindowGetPosition failed:', err);
       dragging.current = false;
     }
   }, [maximized, runtime]);
@@ -80,6 +83,33 @@ function useWindowDrag(desktop: boolean, maximized: boolean, runtime: Runtime | 
 
 function useWindowState() {
   const [maximized, setMaximized] = useState(false);
+  const maximizedRef = useRef(false);
+
+  useEffect(() => {
+    const app = getDesktopApp();
+    if (!app) return;
+
+    // 优先使用持久化的窗口状态，避免依赖 Wails runtime 启动期不可靠的查询
+    const initMaximized = async () => {
+      if (app.GetWindowState) {
+        try {
+          const state = await app.GetWindowState();
+          setMaximized(!!state.maximised);
+          maximizedRef.current = !!state.maximised;
+          return;
+        } catch {}
+      }
+      // 回退：WindowIsMaximised 也是 async，取返回值
+      if (app.WindowIsMaximised) {
+        try {
+          const isMax = await app.WindowIsMaximised();
+          setMaximized(!!isMax);
+          maximizedRef.current = !!isMax;
+        } catch {}
+      }
+    };
+    initMaximized();
+  }, []);
 
   const callWindow = useCallback(async (method: string) => {
     const app = getDesktopApp();
@@ -87,22 +117,34 @@ function useWindowState() {
     try {
       if (method === 'WindowToggleMaximise') {
         await app.WindowToggleMaximise?.();
-        const isMax = app.WindowIsMaximised?.() ?? false;
+        const isMax = app.WindowIsMaximised ? await app.WindowIsMaximised() : false;
         setMaximized(isMax);
+        maximizedRef.current = isMax;
       } else if (method === 'WindowMaximise') {
         await app.WindowMaximise?.();
         setMaximized(true);
+        maximizedRef.current = true;
       } else if (method === 'WindowUnmaximise') {
         await app.WindowUnmaximise?.();
         setMaximized(false);
+        maximizedRef.current = false;
       } else {
         const fn = app[method as keyof typeof app] as unknown as (() => void | Promise<void>) | undefined;
         await fn?.();
       }
     } catch (err) {
       console.error(`TitleBar ${method} failed:`, err);
+      showToast('窗口操作失败');
     }
   }, []);
+
+  // 窗口状态变化时保存到 localStorage
+  useEffect(() => {
+    const app = getDesktopApp();
+    if (app && app.SaveWindowState) {
+      app.SaveWindowState(maximized);
+    }
+  }, [maximized]);
 
   const handleMaxRestore = useCallback(() => {
     callWindow(maximized ? 'WindowUnmaximise' : 'WindowMaximise');
