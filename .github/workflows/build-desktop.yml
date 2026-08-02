@@ -49,7 +49,10 @@ jobs:
         run: cd apps/web && npm ci
 
       - name: Go vet (desktop)
-        run: cd apps/desktop && go vet ./...
+        run: |
+          # main.go 有 //go:embed all:frontend/dist，需先创建目录否则 embed 编译失败
+          mkdir -p apps/desktop/frontend/dist
+          cd apps/desktop && go vet ./...
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
