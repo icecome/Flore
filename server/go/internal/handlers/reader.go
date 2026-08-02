@@ -1390,6 +1390,7 @@ func (h *ReaderHandler) ProxyCSS(c *gin.Context) {
 //   - 经后端代理可避免把订阅域名直接泄露给第三方，且国内网络可达。
 //   - 只读透传，已在全局速率限制 + 类型白名单 + 尺寸上限保护下运行，
 //     故注册于非敏感路由组（<img> 无法携带 Authorization 头）。
+//
 // 参数：
 //   - domain: 站点域名（如 example.com），将拼接到图标服务基址之后
 func (h *ReaderHandler) ProxyFavicon(c *gin.Context) {

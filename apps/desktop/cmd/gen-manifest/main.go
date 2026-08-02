@@ -2,10 +2,11 @@
 // 后续由 CI（release.yml）调用，将产物上传 R2 后发布该 manifest。
 //
 // 文件名规范：flore-<edition>-<os>-<arch>-<version>.<ext>
-//   edition: portable|setup
-//   os: windows|darwin|linux
-//   arch: amd64|arm64
-//   ext: zip|exe|dmg|deb
+//
+//	edition: portable|setup
+//	os: windows|darwin|linux
+//	arch: amd64|arm64
+//	ext: zip|exe|dmg|deb
 //
 // 用法示例：
 //
@@ -48,13 +49,13 @@ type asset struct {
 }
 
 type manifest struct {
-	SchemaVersion int      `json:"schemaVersion"`
-	App           string   `json:"app"`
-	Latest        string   `json:"latest"`
-	MinSupported  string   `json:"minSupported"`
-	PublishedAt   string   `json:"publishedAt"`
-	Notes         string   `json:"notes"`
-	Assets        []asset  `json:"assets"`
+	SchemaVersion int     `json:"schemaVersion"`
+	App           string  `json:"app"`
+	Latest        string  `json:"latest"`
+	MinSupported  string  `json:"minSupported"`
+	PublishedAt   string  `json:"publishedAt"`
+	Notes         string  `json:"notes"`
+	Assets        []asset `json:"assets"`
 }
 
 func main() {
@@ -94,8 +95,8 @@ func main() {
 			continue
 		}
 
-		edition := m[1] // portable|setup
-		osName := m[2]  // windows|darwin|linux
+		edition := m[1]  // portable|setup
+		osName := m[2]   // windows|darwin|linux
 		archName := m[3] // amd64|arm64
 		platform := osName + "/" + archName
 

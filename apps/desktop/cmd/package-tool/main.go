@@ -1,8 +1,9 @@
 // package-tool 跨平台生成 Flore 分发包，替代原 Windows 专用的 package-portable.ps1。
 //
 // 命名规范（统一所有分发包）：
-//   portable: flore-portable-<os>-<arch>-<version>.zip
-//   setup:    flore-setup-<os>-<arch>-<version>.exe
+//
+//	portable: flore-portable-<os>-<arch>-<version>.zip
+//	setup:    flore-setup-<os>-<arch>-<version>.exe
 //
 // 版本号由 -version 传入，代码中不硬编码。版本号格式示例：0.1.0-20260802。
 // 版本进文件名，确保文件脱离 Release 后仍可追溯。

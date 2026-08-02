@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"git.sr.ht/~jackmordaunt/go-toast/v2"
 	"desktop/internal/updater"
+	"git.sr.ht/~jackmordaunt/go-toast/v2"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

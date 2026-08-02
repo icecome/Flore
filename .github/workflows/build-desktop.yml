@@ -17,7 +17,7 @@ jobs:
             goos: windows
           - os: macos-latest
             goos: darwin
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             goos: linux
     runs-on: ${{ matrix.os }}
     steps:
@@ -37,8 +37,6 @@ jobs:
         if: matrix.goos == 'linux'
         run: |
           sudo apt-get update
-          # Ubuntu 24.04 使用 libwebkit2gtk-4.1-dev
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev 2>/dev/null ||
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libgoocanvas-2.0-dev
 
       - name: Install Go dependencies

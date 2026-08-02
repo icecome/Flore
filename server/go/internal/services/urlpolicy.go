@@ -98,9 +98,9 @@ func isPrivateIP(ipStr string) bool {
 }
 
 // ValidateURL checks whether the given URL is safe to fetch:
-//  - scheme must be http or https
-//  - target host must not resolve to a private/reserved IP
-//  - disallowed DNS names are checked against a simple deny list
+//   - scheme must be http or https
+//   - target host must not resolve to a private/reserved IP
+//   - disallowed DNS names are checked against a simple deny list
 func ValidateURL(rawURL string) error {
 	host, err := validateURLBasic(rawURL)
 	if err != nil {
