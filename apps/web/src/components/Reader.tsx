@@ -494,66 +494,62 @@ export default function Reader({
     }
   }, [item]);
 
-  /** 导出当前文章为 PDF（通过打印保存） */
+  /** 导出当前文章为 PDF（通过浏览器原生打印） */
   const handleExportPDF = useCallback(async (): Promise<boolean> => {
     if (!item || !scrollRef.current) return false;
-    const el = scrollRef.current.querySelector('article');
-    if (!el) {
+    const articleEl = scrollRef.current.querySelector('article');
+    if (!articleEl) {
       showToast('没有可导出的内容');
       return false;
     }
     try {
       showToast('正在生成 PDF...');
-      // 动态 import 避免 html2canvas 拖累初始包体积
-      const { default: html2canvas } = await import('html2canvas');
-      const canvas = await html2canvas(el, {
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        scale: 2,
-      });
-      // 使用异步 toBlob 避免阻塞主线程
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-      if (!blob) { showToast('导出失败'); return false; }
-      const imgSrc = URL.createObjectURL(blob);
+      // 创建一个临时的打印窗口，包含完整的文章样式
       const printWin = window.open('', '_blank');
-      if (!printWin) { URL.revokeObjectURL(imgSrc); showToast('请允许弹出窗口'); return false; }
+      if (!printWin) {
+        showToast('请允许弹出窗口');
+        return false;
+      }
+
       const escapedTitle = (item.title || '').replace(/[&<>"']/g, (c) =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c)
       );
-      // 使用 DOM API 构建文档，避免 document.write 已废弃 API
-      const doc = printWin.document;
-      doc.title = escapedTitle;
-      const style = doc.createElement('style');
-      style.textContent = `
-        @media print {
-          @page { margin: 15mm; }
-          body { margin: 0; padding: 0; }
-          img { max-width: 100%; height: auto; }
-        }
-        body { display: flex; justify-content: center; padding: 20px; font-family: serif; }
-        img { max-width: 100%; height: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-      `;
-      doc.head.appendChild(style);
-      const img = doc.createElement('img');
-      img.alt = escapedTitle;
-      img.src = imgSrc;
-      img.onload = () => {
-        setTimeout(() => {
-          if (!printWin.closed) {
-            printWin.print();
-            URL.revokeObjectURL(imgSrc);
-          }
-        }, 100);
-      };
-      doc.body.appendChild(img);
+
+      // 构造完整的打印页面，直接渲染文章HTML
+      printWin.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>${escapedTitle}</title>
+          <style>
+            @page { margin: 15mm; }
+            body { font-family: ${settings.readerFontFamily}; max-width: 720px; margin: 20px auto; padding: 20px; }
+            img { max-width: 100%; height: auto; }
+            .reader-content { line-height: 1.6; }
+          </style>
+        </head>
+        <body>
+          ${articleEl.innerHTML}
+        </body>
+        </html>
+      `);
+      printWin.document.close();
       printWin.focus();
-      showToast('PDF 打印窗口已打开，可选择"另存为 PDF"');
+      // 等待页面加载后触发打印
+      setTimeout(() => {
+        if (!printWin.closed) {
+          printWin.print();
+        }
+      }, 100);
+      showToast('PDF打印窗口已打开，请选择"另存为PDF"');
       return true;
-    } catch {
+    } catch (err) {
+      console.error('Export PDF failed:', err);
       showToast('导出失败');
       return false;
     }
-  }, [item]);
+  }, [item, settings]);
 
   /** 切换全文模式（摘要 / 全文） */
   const onToggleReaderMode = useCallback(async () => {

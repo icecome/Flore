@@ -1,18 +1,52 @@
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { Folder, Item, Source } from '../types';
-import { getItemMarkdownUrl, openExternal } from './api';
+import { getItemMarkdownUrl, openExternal, getDesktopApp } from './api';
 import { showToast } from './toast';
 
 // 通用：安全打开外部 URL（仅允许 http/https）
 // 已合并到 openExternal（utils/api.ts），此处保留别名兼容
 export const safeOpenUrl = openExternal;
 
-/** 触发单篇文章的 Markdown 下载（地址由 api 层统一提供） */
-function downloadItemMarkdown(itemId: number): void {
+/** 触发单篇文章的 Markdown 下载（桌面端用资源管理器保存对话框，Web端使用保存对话框） */
+async function downloadItemMarkdown(itemId: number): Promise<void> {
+  const desktopApp = getDesktopApp();
+  
+  // 方案1：桌面端专用 SaveMarkdownFile 方法
+  if (desktopApp?.SaveMarkdownFile) {
+    const markdownUrl = getItemMarkdownUrl(itemId);
+    try {
+      await desktopApp.SaveMarkdownFile(markdownUrl);
+      showToast('Markdown 已保存');
+    } catch (err) {
+      console.error('Failed to save Markdown file via Wails:', err);
+      showToast('保存失败，请重试');
+    }
+    return;
+  }
+
+  // 方案2：使用浏览器原生保存对话框（showSaveFilePicker）
+  try {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: `${itemId}.md`,
+      types: [{ description: 'Markdown 文件', accept: { 'text/markdown': ['.md'] } }],
+    });
+    const writable = await handle.createWritable();
+    const response = await fetch(getItemMarkdownUrl(itemId));
+    const content = await response.text();
+    await writable.write(content);
+    await writable.close();
+    showToast('Markdown 已保存');
+    return;
+  } catch (err) {
+    console.warn('showSaveFilePicker not supported or cancelled', err);
+  }
+
+  // 方案3：回退到浏览器静默下载
   const a = document.createElement('a');
   a.href = getItemMarkdownUrl(itemId);
-  a.download = '';
+  a.download = `${itemId}.md`;
   a.click();
+  showToast('正在下载 Markdown...');
 }
 
 // ---------- Sidebar: 订阅源 ----------

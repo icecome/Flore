@@ -24,6 +24,7 @@ interface WailsApp {
   SaveBackupFile?: (name: string) => Promise<string>;
   SaveConfigFile?: (configJSON: string) => Promise<string>;
   SavePNGFile?: (data: string) => Promise<string>;
+  SaveMarkdownFile?: (url: string) => Promise<string>;
   WindowMinimise?: () => void;
   WindowMaximise?: () => void;
   WindowUnmaximise?: () => void;

@@ -10,10 +10,10 @@
     "dev:router": "cd apps/routing-tool && npm run dev",
     "build:web": "cd apps/web && npm run build",
     "build:router": "cd apps/routing-tool && npm run build",
-    "build:go": "cd server/go && go build -ldflags=\"-X github.com/rss/go-server/internal/handlers.appVersion=${npm_package_version}\" -o ../../apps/desktop/build/bin/florebackend ./cmd/main.go",
-    "build:desktop": "cd apps/desktop && wails build -ldflags \"-X desktop.version=${npm_package_version}\" && go run ./cmd/package-tool -version ${npm_package_version}",
+    "build:go": "cd server/go && go build -ldflags=\"-X github.com/rss/go-server/internal/handlers.appVersion=%npm_package_version%\" -o ../../apps/desktop/build/bin/florebackend ./cmd/main.go",
+    "build:desktop": "cd apps/desktop && node -e \"require('fs').writeFileSync('version.go','package main\\n\\nvar version = \\\"'+process.env.npm_package_version+'\\\"\\n')\" && \"%USERPROFILE%\\gopath\\bin\\wails.exe\" build && go run ./cmd/package-tool -version %npm_package_version%",
     "build": "npm run build:web && npm run build:go && npm run build:desktop",
-    "wails:dev": "cd apps/desktop && wails dev",
+    "wails:dev": "cd apps/desktop && \"%USERPROFILE%\\gopath\\bin\\wails.exe\" dev",
     "wails:build": "npm run build:desktop"
   },
   "devDependencies": {

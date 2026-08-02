@@ -48,5 +48,8 @@ apps/desktop/build/bin/
 # Generated design previews
 .design/
 
+# NSIS 安装器项目文件（需跟踪，供 CI 构建安装器）
+!build/windows/installer/project.nsi
+
 # AI assistant workspace (project data, do not commit)
 .workbuddy/

@@ -93,7 +93,7 @@ export default function SettingsAboutTab() {
 
       <Section title="关于">
         <p className="m-0 text-[14px] leading-relaxed text-secondary">
-          本地优先的 RSS 阅读器，支持订阅源管理、文件夹分组、阅读模式、OPML 导入导出等功能。
+          又一个 RSS 阅读器，支持订阅源管理、文件夹分组、阅读模式、OPML 导入导出等功能。
         </p>
       </Section>
     </div>

@@ -1,14 +1,21 @@
 // gen-manifest 读取构建产物目录，计算各平台资产的 sha256，并生成 update.json。
 // 后续由 CI（release.yml）调用，将产物上传 R2 后发布该 manifest。
 //
+// 文件名规范：flore-<edition>-<os>-<arch>-<version>.<ext>
+//   edition: portable|setup
+//   os: windows|darwin|linux
+//   arch: amd64|arm64
+//   ext: zip|exe|dmg|deb
+//
 // 用法示例：
 //
 //	go run ./cmd/gen-manifest \
-//	  -version 0.0.1-20260803 \
+//	  -version 0.1.0-20260803 \
 //	  -dir ./dist \
 //	  -baseURL https://cdn-dl.icecome.com \
 //	  -githubRepo icecome/Flore \
 //	  -notes "修复若干已知问题" \
+//	  -platforms windows \
 //	  -out update.json
 package main
 
@@ -22,9 +29,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// assetNameRe 匹配 flore-<edition>-<os>-<arch>-<version>.<ext>
+var assetNameRe = regexp.MustCompile(`^flore-(portable|setup)-(windows|darwin|linux)-(amd64|arm64)-(.+)\.(zip|exe|dmg|deb)$`)
 
 type asset struct {
 	Platform  string   `json:"platform"`
@@ -38,17 +49,17 @@ type asset struct {
 
 type manifest struct {
 	SchemaVersion int      `json:"schemaVersion"`
-	App            string   `json:"app"`
-	Latest         string   `json:"latest"`
-	MinSupported   string   `json:"minSupported"`
-	PublishedAt    string   `json:"publishedAt"`
-	Notes          string   `json:"notes"`
-	Assets         []asset  `json:"assets"`
+	App           string   `json:"app"`
+	Latest        string   `json:"latest"`
+	MinSupported  string   `json:"minSupported"`
+	PublishedAt   string   `json:"publishedAt"`
+	Notes         string   `json:"notes"`
+	Assets        []asset  `json:"assets"`
 }
 
 func main() {
-	version := flag.String("version", "", "发布版本号（必填，如 0.0.1-20260803）")
-	dir := flag.String("dir", "dist", "构建产物目录，内含各平台 *.zip")
+	version := flag.String("version", "", "发布版本号（必填，如 0.1.0-20260803）")
+	dir := flag.String("dir", "dist", "构建产物目录，内含各平台分发包")
 	baseURL := flag.String("baseURL", "https://cdn-dl.icecome.com", "R2/CDN 基础地址（manifest 主 URL 前缀）")
 	githubRepo := flag.String("githubRepo", "", "GitHub 仓库 owner/name，用于生成 Release 兜底 URL（可选）")
 	notes := flag.String("notes", "", "更新说明（Markdown 文本）")
@@ -76,17 +87,17 @@ func main() {
 		}
 		name := e.Name()
 		lower := strings.ToLower(name)
-		if !strings.HasSuffix(lower, ".zip") || !strings.HasPrefix(lower, "flore-") {
+
+		m := assetNameRe.FindStringSubmatch(lower)
+		if m == nil {
+			// 非匹配格式，静默跳过（如 Flore-portable-*.zip 等归档副本）
 			continue
 		}
-		// 严格匹配 flore-<os>-<arch>.zip（恰好两段），避免误吞 Flore-portable-<version>.zip。
-		body := strings.TrimSuffix(strings.TrimPrefix(lower, "flore-"), ".zip")
-		parts := strings.Split(body, "-")
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			fmt.Fprintf(os.Stderr, "跳过无法识别的资产名: %s\n", name)
-			continue
-		}
-		platform := parts[0] + "/" + parts[1]
+
+		edition := m[1] // portable|setup
+		osName := m[2]  // windows|darwin|linux
+		archName := m[3] // amd64|arm64
+		platform := osName + "/" + archName
 
 		if *platforms != "" && !platformInList(platform, *platforms) {
 			fmt.Fprintf(os.Stderr, "跳过非目标平台资产: %s (%s)\n", name, platform)
@@ -108,7 +119,7 @@ func main() {
 
 		assets = append(assets, asset{
 			Platform: platform,
-			Variant:  "portable",
+			Variant:  edition,
 			FileName: name,
 			Size:     size,
 			SHA256:   sum,
@@ -117,17 +128,17 @@ func main() {
 	}
 
 	if len(assets) == 0 {
-		fatal("在 %s 中未找到任何 flore-*.zip 资产", *dir)
+		fatal("在 %s 中未找到任何 flore-*.zip 或 flore-*.exe 资产", *dir)
 	}
 
 	m := manifest{
 		SchemaVersion: 1,
-		App:            "flore",
-		Latest:         *version,
-		MinSupported:   *minSupported,
-		PublishedAt:    time.Now().UTC().Format(time.RFC3339),
-		Notes:          *notes,
-		Assets:         assets,
+		App:           "flore",
+		Latest:        *version,
+		MinSupported:  *minSupported,
+		PublishedAt:   time.Now().UTC().Format(time.RFC3339),
+		Notes:         *notes,
+		Assets:        assets,
 	}
 
 	data, err := json.MarshalIndent(m, "", "  ")

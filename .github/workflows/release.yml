@@ -1,15 +1,21 @@
 # Release workflow for Flore (W3 自动更新分发，跨平台构建).
 #
 # 触发：
-#   - 推送 v* 标签（如 v0.0.1-20260802）自动发布
+#   - 推送 v* 标签（如 v0.1.0-20260802）自动发布
 #   - workflow_dispatch 手动填写版本号发布
 #
 # 流程：
-#   1) build 矩阵（windows/macos/ubuntu）各自：wails build -> package-tool 产出 flore-<os>-<arch>.zip
-#   2) release 作业汇总所有 zip -> gen-manifest（仅 windows 入 manifest）-> 上传 R2（主通道）
-#      -> 发 GitHub Release（兜底通道，含全部平台 zip + update.json）
+#   1) build 矩阵（windows/macos/ubuntu）各自构建：
+#      - wails build -> package-tool portable 产出 flore-portable-<os>-<arch>-<version>.zip
+#      - Windows 额外：makensis + package-tool setup 产出 flore-setup-windows-amd64-<version>.exe
+#   2) release 作业汇总所有产物 -> gen-manifest（仅 windows 入 manifest）-> 上传 R2
+#      -> 发 GitHub Release（含全部平台 zip + 安装包 exe + update.json）
 #
-# 所需 GitHub Secrets（仓库 Settings -> Secrets）：
+# 命名规范（统一所有分发包）：
+#   flore-portable-<os>-<arch>-<version>.zip       便携版
+#   flore-setup-<os>-<arch>-<version>.exe           安装版（仅 Windows，NSIS）
+#
+# 所需 GitHub Secrets：
 #   R2_ACCOUNT_ID          Cloudflare 账户 ID
 #   R2_ACCESS_KEY_ID       R2 S3 兼容访问密钥 ID
 #   R2_SECRET_ACCESS_KEY   R2 S3 兼容私密访问密钥
@@ -26,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（不含 v 前缀，如 0.0.1-20260802）'
+        description: '版本号（不含 v 前缀，如 0.1.0-20260802）'
         required: true
         type: string
 
@@ -85,17 +91,39 @@ jobs:
           VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
           VERSION="${VERSION#v}"
           cd apps/desktop
-          wails build -ldflags "-X desktop.version=$VERSION"
+
+          # 生成 version.go（替代 ldflags 注入，Wails 构建流程中 ldflags 不生效）
+          node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"' + '$VERSION' + '\"\n')"
+
+          # 构建二进制（不使用 -nsis 标志，避免 project.nsi 版本格式问题）
+          wails build
+
+          # 生成 wails_tools.nsh（供 NSIS 安装器使用）
+          mkdir -p build/windows/installer
+          cp installer/wails_tools.nsh build/windows/installer/
+
+          # 便携版
           FE_BIN=build/bin/Flore
           if [ "${{ matrix.goos }}" = "windows" ]; then FE_BIN=build/bin/Flore.exe; fi
           if [ "${{ matrix.goos }}" = "darwin" ]; then FE_BIN=build/bin/Flore.app; fi
-          go run ./cmd/package-tool -version "$VERSION" -os ${{ matrix.goos }} -arch ${{ matrix.goarch }} -feBin "$FE_BIN"
+          go run ./cmd/package-tool -edition portable -version "$VERSION" -os ${{ matrix.goos }} -arch ${{ matrix.goarch }} -feBin "$FE_BIN" -clean false
+
+          # Windows 安装版（仅此平台）
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            choco install nsis -y
+            makensis installer.nsi
+            go run ./cmd/package-tool -edition setup -version "$VERSION" -os windows -arch amd64 -setupBin build/bin/Flore-installer.exe
+            # 清理便携目录（NSIS 已用毕）
+            rm -rf build/Flore-portable
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: flore-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: apps/desktop/build/*.zip
+          path: |
+            apps/desktop/build/flore-portable-${{ matrix.goos }}-${{ matrix.goarch }}-*.zip
+            apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.exe
 
   release:
     needs: build
@@ -132,10 +160,10 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect zips
+      - name: Collect build artifacts
         run: |
           mkdir -p apps/desktop/build
-          cp artifacts/flore-*/*.zip apps/desktop/build/
+          cp artifacts/flore-*/* apps/desktop/build/
           ls -la apps/desktop/build/
 
       - name: Generate update manifest (windows only)
@@ -159,7 +187,7 @@ jobs:
           AWS_EC2_METADATA_DISABLED: true
         run: |
           V="${{ steps.ver.outputs.version }}"
-          aws s3 cp "apps/desktop/build/flore-windows-amd64.zip" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/flore-windows-amd64.zip"
+          aws s3 cp "apps/desktop/build/flore-portable-windows-amd64-${V}.zip" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
           aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/update.json"
 
       - name: Publish GitHub Release
@@ -168,9 +196,7 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Flore ${{ steps.ver.outputs.tag }}
           files: |
-            apps/desktop/build/flore-windows-amd64.zip
-            apps/desktop/build/flore-darwin-arm64.zip
-            apps/desktop/build/flore-linux-amd64.zip
-            apps/desktop/build/Flore-portable-${{ steps.ver.outputs.version }}.zip
+            apps/desktop/build/flore-portable-*.zip
+            apps/desktop/build/flore-setup-*.exe
             apps/desktop/build/update.json
           fail_on_unmatched_files: true

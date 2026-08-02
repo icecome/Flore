@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 
 ####
 ## Please note: Template replacements don't work in this file. They are provided with default defines like
@@ -35,8 +35,16 @@ Unicode true
 !include "wails_tools.nsh"
 
 # The version information for this two must consist of 4 parts
-VIProductVersion "${INFO_PRODUCTVERSION}.0"
-VIFileVersion    "${INFO_PRODUCTVERSION}.0"
+# INFO_PRODUCTVERSION 格式为 X.Y.Z-YYYYMMDD，需转成 X.Y.Z.YYYYMMDD
+!define VI_VERSION "${INFO_PRODUCTVERSION}"
+!searchparse /noerrors "${VI_VERSION}" "" VI_MAJOR "." VI_MINOR "." VI_PATCH "-" VI_DATE
+!ifndef VI_DATE
+  VIProductVersion "${VI_VERSION}.0"
+  VIFileVersion    "${VI_VERSION}.0"
+!else
+  VIProductVersion "${VI_MAJOR}.${VI_MINOR}.${VI_PATCH}.${VI_DATE}"
+  VIFileVersion    "${VI_MAJOR}.${VI_MINOR}.${VI_PATCH}.${VI_DATE}"
+!endif
 
 VIAddVersionKey "CompanyName"     "${INFO_COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} Installer"

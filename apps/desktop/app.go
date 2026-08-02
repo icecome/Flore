@@ -34,9 +34,8 @@ const restartWaitPidEnv = "FLORE_RESTART_WAIT_PID"
 // 替代此前从 CWD 解析相对路径的不安全查找（M4）。
 const backendPathEnv = "FLORE_BACKEND_PATH"
 
-// version 由构建时通过 -ldflags "-X desktop.version=..." 注入（来源 package.json），
-// 桌面壳更新器据此与远端 manifest 比对判断是否需要更新。未注入时回退 "dev"。
-var version = "dev"
+// version 由 version.go 在构建时生成（来源 package.json 的 version 字段），
+// 桌面壳更新器据此与远端 manifest 比对判断是否需要更新。开发模式下回退 "dev"。
 
 // App struct
 type App struct {
@@ -755,6 +754,7 @@ func (a *App) appDataDir() string {
 }
 
 // findPortableDataDir 便携模式检测：可执行文件同级目录存在 data/ 时返回其路径。
+// 若 data/ 不存在则尝试创建（首次启动时自动建立），创建失败则回退到用户数据目录。
 func (a *App) findPortableDataDir() string {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -762,10 +762,17 @@ func (a *App) findPortableDataDir() string {
 	}
 	dataDir := filepath.Join(filepath.Dir(exePath), "data")
 	info, statErr := os.Stat(dataDir)
-	if statErr != nil || !info.IsDir() {
-		return ""
+	if statErr == nil && info.IsDir() {
+		return dataDir
 	}
-	return dataDir
+	// 目录不存在，尝试创建（安装版/便携版首次启动时自动建立）
+	if os.IsNotExist(statErr) {
+		if mkErr := os.MkdirAll(dataDir, 0o755); mkErr == nil {
+			return dataDir
+		}
+		// 创建失败（如 Program Files 只读目录），静默回退到用户数据目录
+	}
+	return ""
 }
 
 // auxRoot 返回辅助目录（webview2/、backups/）的根。
