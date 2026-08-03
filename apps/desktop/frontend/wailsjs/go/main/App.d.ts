@@ -9,6 +9,8 @@ export function GetAPIToken():Promise<string>;
 
 export function GetBackendStatus():Promise<main.BackendStatus>;
 
+export function GetPlatform():Promise<string>;
+
 export function GetVersion():Promise<string>;
 
 export function GetWindowState():Promise<main.WindowState>;

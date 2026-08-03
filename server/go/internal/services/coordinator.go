@@ -2,6 +2,7 @@ package services
 
 import (
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -245,29 +246,48 @@ func (c *FetchCoordinator) LastRoundNewItems() int {
 func (c *FetchCoordinator) worker() {
 	defer c.wg.Done()
 	for sourceID := range c.taskCh {
-		// 从 pending 移到 inFlight
-		c.mu.Lock()
-		delete(c.pending, sourceID)
-		c.inFlight[sourceID] = struct{}{}
-		c.mu.Unlock()
-
-		// 执行抓取（含 upsert + 健康更新），新文章索引由后台 goroutine 异步处理
-		newCount, err := c.service.FetchSourceFeed(sourceID)
-		if err != nil {
-			slog.Warn("fetch source feed failed", "source_id", sourceID, "error", err)
-		} else {
-			c.newItemsThisRound.Add(int64(newCount))
-		}
-
-		// 完成后移除 inFlight，若全部空闲则清零本轮起始时间
-		c.mu.Lock()
-		delete(c.inFlight, sourceID)
-		if len(c.inFlight) == 0 && len(c.pending) == 0 {
-			// 本轮完成：冻结新增数供 fetch-status 读取，并清零进行中计数
-			c.lastRoundNewItems.Store(c.newItemsThisRound.Load())
-			c.newItemsThisRound.Store(0)
-			c.startedAt.Store(0)
-		}
-		c.mu.Unlock()
+		// 单源 panic 不能拖垮整个 worker：recover 并记录，同时清理 inFlight 记账，
+		// 避免该源永久卡在去重状态而无法再次提交。
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("fetch worker panic recovered",
+						"source_id", sourceID, "panic", r,
+						"stack", string(debug.Stack()))
+					c.mu.Lock()
+					delete(c.inFlight, sourceID)
+					c.mu.Unlock()
+				}
+			}()
+			c.processTask(sourceID)
+		}()
 	}
+}
+
+// processTask 处理单个抓取任务：记账迁移 + 抓取 + 记账回收。
+func (c *FetchCoordinator) processTask(sourceID int) {
+	// 从 pending 移到 inFlight
+	c.mu.Lock()
+	delete(c.pending, sourceID)
+	c.inFlight[sourceID] = struct{}{}
+	c.mu.Unlock()
+
+	// 执行抓取（含 upsert + 健康更新），新文章索引由后台 goroutine 异步处理
+	newCount, err := c.service.FetchSourceFeed(sourceID)
+	if err != nil {
+		slog.Warn("fetch source feed failed", "source_id", sourceID, "error", err)
+	} else {
+		c.newItemsThisRound.Add(int64(newCount))
+	}
+
+	// 完成后移除 inFlight，若全部空闲则清零本轮起始时间
+	c.mu.Lock()
+	delete(c.inFlight, sourceID)
+	if len(c.inFlight) == 0 && len(c.pending) == 0 {
+		// 本轮完成：冻结新增数供 fetch-status 读取，并清零进行中计数
+		c.lastRoundNewItems.Store(c.newItemsThisRound.Load())
+		c.newItemsThisRound.Store(0)
+		c.startedAt.Store(0)
+	}
+	c.mu.Unlock()
 }

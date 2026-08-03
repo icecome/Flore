@@ -25,9 +25,14 @@ function withTimeout(options: FetchOptions): RequestInit {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, ...init } = options;
   // 桌面端注入的 Bearer Token：仅当存在时才附加，Web 端（无 token）不影响非鉴权接口
   const token = getApiToken();
+  // 写请求附加自定义头 X-Requested-With：跨域简单请求无法携带，配合后端 CSRFProtection
+  // 中间件阻断恶意网页对本机后端的写请求。GET/HEAD 为只读，不附加以避免触发预检。
+  const method = init.method ?? 'GET';
+  const isWrite = method !== 'GET' && method !== 'HEAD';
   const headers = {
     ...(init.headers ?? {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(isWrite ? { 'X-Requested-With': 'XMLHttpRequest' } : {}),
   };
   const base: RequestInit = { ...init, headers };
   const timeoutSignal = AbortSignal.timeout(timeoutMs);

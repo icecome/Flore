@@ -51,6 +51,16 @@ func (s *ReaderService) buildExportQuery(scope ExportScope) *gorm.DB {
 		Joins("LEFT JOIN Source ON Item.sourceId = Source.id")
 
 	query = applyScopeFilter(query, scope)
+	if scope.FolderID != nil && scope.SourceID == nil {
+		// 递归获取文件夹及其所有子文件夹的ID，覆盖 applyScopeFilter 中的精确匹配
+		folderIDs, err := s.getAllFolderAllDescendantIDs(*scope.FolderID)
+		if err != nil {
+			// 查询失败返回空结果，避免导出错误数据
+			query = query.Where("1 = 0")
+		} else {
+			query = query.Where("Source.folderId IN (?)", folderIDs)
+		}
+	}
 	return query
 }
 
@@ -58,7 +68,9 @@ func applyScopeFilter(query *gorm.DB, scope ExportScope) *gorm.DB {
 	if scope.SourceID != nil {
 		query = query.Where("Item.sourceId = ?", *scope.SourceID)
 	} else if scope.FolderID != nil {
-		query = query.Where("Source.folderId = ?", *scope.FolderID)
+		// 注意：buildExportQuery 中会额外添加递归文件夹查询条件，
+		// 此处仅设 SourceID 不为 nil 时的条件，folder 条件由 buildExportQuery 覆盖
+		query = query.Where("Source.folderId IS NOT NULL")
 	}
 	if scope.Starred {
 		query = query.Where("Item.isStarred = ?", true)

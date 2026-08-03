@@ -139,12 +139,6 @@ export default function Sidebar({
   totalCount = 0,
   unreadCountInScope = 0,
 }: Props) {
-  // totalUnread 由 sources 计算（用于未传入 prop 时的降级）
-  const totalUnread = useMemo(
-    () => sources.reduce((sum, source) => sum + (source.unreadCount || 0), 0),
-    [sources]
-  );
-
   // 根据设置过滤订阅源（当前选中的源始终显示）
   // hideRead 保留"从未抓取过"的源（lastSuccessAt 为空），避免新导入源在抓取前被隐藏
   const visibleSources = useMemo(() => {

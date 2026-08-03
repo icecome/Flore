@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -91,6 +92,9 @@ func main() {
 	r.Use(gin.Recovery())
 	r.SetTrustedProxies([]string{})
 	r.Use(cors.New(buildCORSConfig()))
+	// CSRF 防护：拦截来自不可信源的浏览器写请求（详见 handlers.CSRFProtection）。
+	// 必须注册在 CORS 之后，以便预检 OPTIONS 由 CORS 中间件先行处理。
+	r.Use(handlers.CSRFProtection())
 
 	apiToken := os.Getenv("FLORE_API_TOKEN")
 	readerHandler := handlers.NewReaderHandler()
@@ -131,10 +135,26 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// 自行创建 listener：
+	//   - PORT=0 时由系统分配空闲高位端口，消除"桌面壳探测端口后交给后端绑定"的 TOCTOU 窗口；
+	//   - 绑定成功后把实际端口写入 FLORE_PORT_FILE 指定文件（供桌面壳读取，用于健康检查与 API 基址）。
+	ln, err := net.Listen("tcp", bindAddr+":"+port)
+	if err != nil {
+		slog.Error("failed to listen", "addr", bindAddr+":"+port, "error", err)
+		os.Exit(1)
+	}
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		slog.Info("server listening", "addr", ln.Addr().String())
+		if portFile := os.Getenv("FLORE_PORT_FILE"); portFile != "" {
+			if werr := os.WriteFile(portFile, []byte(strconv.Itoa(tcpAddr.Port)), 0644); werr != nil {
+				slog.Warn("failed to write port file", "path", portFile, "error", werr)
+			}
+		}
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("server starting", "addr", srv.Addr)
-		errCh <- srv.ListenAndServe()
+		errCh <- srv.Serve(ln)
 	}()
 
 	gracefulShutdown(srv, scheduler, coordinator, errCh, shutdownCh)
@@ -178,17 +198,17 @@ func gracefulShutdown(srv *http.Server, scheduler *services.Scheduler, coordinat
 // buildCORSConfig 跨域来源校验。
 //   - 显式设置 CORS_ORIGINS=* 或具体域名：Web 部署场景，沿用旧逻辑放开。
 //   - 未设置（桌面场景默认）：用 AllowOriginFunc 动态反射本地源，
-//     放行 127.0.0.1/localhost 动态端口与 WebView 的 opaque origin
-//     （Origin 为 "" 或 "null"，常见于 Linux/macOS 的 WebKit 无真实源请求），
-//     拒绝任意外网源，避免绑定 127.0.0.1 时被本机恶意网页读取数据。
+//     放行 127.0.0.1/localhost 动态端口与 Wails WebView 源，
+//     拒绝任意外网源与 opaque origin（Origin: null，file:// 页面/沙箱 iframe 会发送），
+//     避免绑定 127.0.0.1 时被本机恶意网页读取数据。
 //
 // 注意：AllowOriginFunc 与 AllowAllOrigins 互斥；AllowCredentials 必须为 false，
 // 否则 gin-contrib/cors 会因「* + credentials」直接 panic。前端 fetch 不带凭证，
-// 后端写接口由 FLORE_API_TOKEN 保护，安全边界不受影响。
+// 后端写接口由 FLORE_API_TOKEN 与 CSRFProtection 中间件双重保护。
 func buildCORSConfig() cors.Config {
 	config := cors.Config{
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: false,
 	}
@@ -202,21 +222,8 @@ func buildCORSConfig() cors.Config {
 		// Web 部署：指定具体允许源。
 		config.AllowOrigins = strings.Split(envCORSOrigins, ",")
 	default:
-		// 桌面默认：动态反射本地源，含 WebView 的 opaque origin。
-		config.AllowOriginFunc = func(origin string) bool {
-			if origin == "" || origin == "null" {
-				return true
-			}
-			switch {
-			case strings.HasPrefix(origin, "http://127.0.0.1:"),
-				strings.HasPrefix(origin, "http://localhost:"),
-				strings.HasPrefix(origin, "https://localhost:"),
-				origin == "http://wails.localhost",
-				origin == "https://wails.localhost":
-				return true
-			}
-			return false
-		}
+		// 桌面默认：动态反射本地源；opaque origin（"null"）一律拒绝。
+		config.AllowOriginFunc = handlers.IsLocalOrigin
 	}
 	return config
 }
@@ -227,8 +234,8 @@ func resolvePort() string {
 		return "3002"
 	}
 	portNum, err := strconv.Atoi(port)
-	if err != nil || portNum < 1 || portNum > 65535 {
-		slog.Error("invalid PORT, must be a number between 1 and 65535", "port", port)
+	if err != nil || portNum < 0 || portNum > 65535 {
+		slog.Error("invalid PORT, must be a number between 0 and 65535", "port", port)
 		os.Exit(1)
 	}
 	return port

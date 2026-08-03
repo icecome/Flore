@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           cd apps/desktop
-          node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"ci\"\n')"
+          node sync-version.mjs
           wails build
 
       - name: Upload artifact

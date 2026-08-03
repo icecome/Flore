@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 	"time"
 )
@@ -44,13 +43,11 @@ func currentPlatform() string {
 }
 
 // manifestURLs 返回按优先级排序的 manifest 拉取地址。
+// 安全说明：不允许通过环境变量覆盖 manifest 地址（曾被用于劫持更新通道，
+// 配合无签名校验可导致任意代码执行）；manifest 仅从固定 HTTPS 通道拉取，
+// 且资产另有 Ed25519 签名校验兜底。
 func manifestURLs() []string {
-	urls := []string{}
-	if env := os.Getenv("FLORE_UPDATE_MANIFEST_URL"); env != "" {
-		urls = append(urls, env)
-	} else {
-		urls = append(urls, defaultManifestURL)
-	}
+	urls := []string{defaultManifestURL}
 	if fallbackManifestURL != "" {
 		urls = append(urls, fallbackManifestURL)
 	}
@@ -89,16 +86,19 @@ func FetchManifest() (*Manifest, error) {
 	return nil, fmt.Errorf("拉取更新清单失败: %w", lastErr)
 }
 
-// matchAsset 从 manifest 中找出当前平台匹配且变体为 portable 的资产。
+// matchAsset 从 manifest 中找出当前平台匹配的资产，优先度：setup > portable > 空 variant。
 func matchAsset(m *Manifest) *Asset {
 	plat := currentPlatform()
-	for i := range m.Assets {
-		a := &m.Assets[i]
-		if a.Platform != plat {
-			continue
-		}
-		if a.Variant == "portable" || a.Variant == "" {
-			return a
+	// 优先找 setup（安装版），其次 portable（便携包），最后任意 variant
+	for _, desiredVariant := range []string{"setup", "portable", ""} {
+		for i := range m.Assets {
+			a := &m.Assets[i]
+			if a.Platform != plat {
+				continue
+			}
+			if a.Variant == desiredVariant {
+				return a
+			}
 		}
 	}
 	return nil

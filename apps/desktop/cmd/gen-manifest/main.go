@@ -17,6 +17,7 @@
 //	  -githubRepo icecome/Flore \
 //	  -notes "修复若干已知问题" \
 //	  -platforms windows \
+//	  -variant setup \
 //	  -out update.json
 package main
 
@@ -66,6 +67,7 @@ func main() {
 	notes := flag.String("notes", "", "更新说明（Markdown 文本）")
 	minSupported := flag.String("minSupported", "", "最低支持版本，低于此版本强制更新（可选）")
 	platforms := flag.String("platforms", "", "仅纳入指定平台（逗号分隔的 goos，如 windows）；为空则纳入全部")
+	variant := flag.String("variant", "", "仅纳入指定 variant（portable|setup）；为空则纳入全部")
 	out := flag.String("out", "update.json", "输出文件路径")
 	flag.Parse()
 
@@ -102,6 +104,10 @@ func main() {
 
 		if *platforms != "" && !platformInList(platform, *platforms) {
 			fmt.Fprintf(os.Stderr, "跳过非目标平台资产: %s (%s)\n", name, platform)
+			continue
+		}
+		if *variant != "" && edition != *variant {
+			fmt.Fprintf(os.Stderr, "跳过非目标 variant %s 资产: %s (%s)\n", *variant, name, edition)
 			continue
 		}
 

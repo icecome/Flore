@@ -94,7 +94,7 @@ export default function SettingsDataTab({ settings, updateSetting }: Props) {
           <button
             onClick={create}
             disabled={working}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] border border-border rounded-md bg-bg-subtle hover:bg-bg hover:text-primary transition-colors disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] border border-border rounded-md bg-elevated hover:bg-hover hover:text-primary transition-colors disabled:opacity-50"
           >
             <Database size={14} />
             立即备份
@@ -102,7 +102,7 @@ export default function SettingsDataTab({ settings, updateSetting }: Props) {
           <button
             onClick={() => fileRef.current?.click()}
             disabled={working}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] border border-border rounded-md bg-bg-subtle hover:bg-bg hover:text-primary transition-colors disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] border border-border rounded-md bg-elevated hover:bg-hover hover:text-primary transition-colors disabled:opacity-50"
           >
             <Upload size={14} />
             导入备份
@@ -110,7 +110,7 @@ export default function SettingsDataTab({ settings, updateSetting }: Props) {
           <button
             onClick={refresh}
             disabled={working}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] border border-border rounded-md bg-bg-subtle hover:bg-bg hover:text-primary transition-colors disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] border border-border rounded-md bg-elevated hover:bg-hover hover:text-primary transition-colors disabled:opacity-50"
           >
             <RefreshCw size={14} />
             刷新

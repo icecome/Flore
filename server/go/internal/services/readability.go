@@ -297,10 +297,14 @@ func fetchHTMLWithClient(rawURL string, client *http.Client) (*http.Response, er
 // FetchImage 代理图片资源，返回原始响应。
 // referer 为嵌入该图片的页面 URL（即文章原文 URL），用于绕过 CDN 防盗链检测。
 // 内置简单重试机制（最多 2 次），应对瞬态网络错误。
-func FetchImage(rawURL string, referer string, client *http.Client) (*http.Response, error) {
+func FetchImage(rawURL string, client *http.Client) (*http.Response, error) {
 	if err := ValidateURLOnly(rawURL); err != nil {
 		return nil, fmt.Errorf("url validation failed: %w", err)
 	}
+
+	// 防盗链通用策略：优先匹配少数需要特定外站 Referer 的 CDN（与 Folo 对齐），
+	// 其余一律使用图片自身 origin 作为同站 Referer，避免外站 Referer 触发 403。
+	referer, origin := imageRefererFor(rawURL)
 
 	buildReq := func() (*http.Request, error) {
 		req, err := http.NewRequest("GET", rawURL, nil)
@@ -308,9 +312,11 @@ func FetchImage(rawURL string, referer string, client *http.Client) (*http.Respo
 			return nil, err
 		}
 		setBrowserHeaders(req)
-		// 图片请求的 Referer 必须设为文章页面的 URL，CDN 防盗链依赖此值
 		if referer != "" {
 			req.Header.Set("Referer", referer)
+		}
+		if origin != "" {
+			req.Header.Set("Origin", origin)
 		}
 		req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
 		req.Header.Set("Sec-Fetch-Dest", "image")
@@ -341,6 +347,37 @@ func FetchImage(rawURL string, referer string, client *http.Client) (*http.Respo
 	}
 
 	return nil, fmt.Errorf("image fetch failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// imageRefererRules 与 Folo 对齐：少数 CDN 需要特定外站 Referer 才能加载图片。
+// 其余图片统一使用"同站 Referer"（imageRefererFor 兜底），无需逐源维护白名单。
+var imageRefererRules = []struct {
+	suffix  string // 匹配 host 后缀
+	referer string
+}{
+	{suffix: ".sinaimg.cn", referer: "https://weibo.com"},
+	{suffix: "i.pximg.net", referer: "https://www.pixiv.net"},
+	{suffix: "cdnfile.sspai.com", referer: "https://sspai.com"},
+	{suffix: ".cdninstagram.com", referer: "https://www.instagram.com"},
+	{suffix: ".xhscdn.com", referer: "https://www.xiaohongshu.com"},
+	{suffix: "sp1.piokok.com", referer: "https://www.piokok.com"},
+}
+
+// imageRefererFor 返回图片请求应使用的 Referer 与 Origin。
+// 命中特例规则用规则指定的外站 Referer；否则用图片自身 origin（同站 Referer）。
+func imageRefererFor(rawURL string) (referer, origin string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", ""
+	}
+	host := strings.ToLower(u.Host)
+	for _, rule := range imageRefererRules {
+		if rule.suffix != "" && strings.HasSuffix(host, rule.suffix) {
+			return rule.referer, rule.referer
+		}
+	}
+	own := u.Scheme + "://" + u.Host
+	return own, own
 }
 
 // FetchCSS 下载外部 CSS 文件，使用浏览器请求头模拟真实浏览器访问。

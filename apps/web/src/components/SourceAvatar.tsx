@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { cn } from '../lib/cn';
 import { sourceColorAuto } from '../utils/sourceColor';
 import { getCachedSettings } from '../utils/settings';
-import { getFaviconProxyBase } from '../utils/api';
+import { getFaviconProxyBase, getFaviconDirectBase } from '../utils/api';
 
 interface Props {
   name: string;
@@ -24,7 +24,10 @@ function getDomain(url?: string): string | null {
 function SourceAvatarBase({ name, url, color, size = 20, className }: Props) {
   const [imgError, setImgError] = useState(false);
   // 读取带缓存的设置，避免列表中每个头像挂载都重新 JSON.parse localStorage
-  const [allowOnline] = useState(() => getCachedSettings().loadOnlineAvatar);
+  const [faviconMode] = useState(() => {
+    const s = getCachedSettings();
+    return s.faviconMode ?? 'off';
+  });
   // url 变化时重置 imgError，避免切换源后仍显示字母头像
   useEffect(() => {
     setImgError(false);
@@ -34,7 +37,11 @@ function SourceAvatarBase({ name, url, color, size = 20, className }: Props) {
   const domain = getDomain(url);
 
   // 尝试加载站点图标，失败则回退到字母头像
-  if (domain && !imgError && allowOnline) {
+  if (domain && faviconMode !== 'off' && !imgError) {
+    const isDirect = faviconMode === 'direct';
+    const src = isDirect
+      ? `${getFaviconDirectBase()}?domain=${encodeURIComponent(domain)}`
+      : `${getFaviconProxyBase()}?domain=${encodeURIComponent(domain)}`;
     return (
       <span
         className={cn('inline-flex shrink-0 items-center justify-center rounded', className)}
@@ -43,10 +50,12 @@ function SourceAvatarBase({ name, url, color, size = 20, className }: Props) {
         title={name}
       >
         <img
-          src={`${getFaviconProxyBase()}?domain=${encodeURIComponent(domain)}`}
+          src={src}
           alt=""
           width={size}
           height={size}
+          loading="lazy"
+          decoding="async"
           className="rounded"
           style={{ objectFit: 'contain' }}
           onError={() => setImgError(true)}

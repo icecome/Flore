@@ -218,121 +218,6 @@ function rewriteSrcset(srcset: string, articleUrl?: string): string {
     .join(', ');
 }
 
-/** 重写 iframe 内容中的图片和 CSS url() 引用为后端代理地址。
- *  与 rewriteImageUrls 不同，此函数：
- *  1. 处理单引号、双引号、无引号三种 src 格式
- *  2. 将相对 URL 解析为绝对 URL
- *  3. 同时重写 <style> 标签内 CSS url() 中的图片引用
- *  4. 使用绝对 URL 避免 <base> 标签干扰
- *  5. 处理 <picture>/<source> 响应式图片和 srcset 属性
- *  @param html iframe 原始 HTML 内容
- *  @param articleUrl 文章原文 URL，用于解析相对路径和设置 Referer
- */
-function rewriteIframeContent(html: string, articleUrl?: string): string {
-  const proxyBase = getImageProxyBase();
-
-  function resolveSrc(src: string): string | null {
-    if (src.startsWith('data:') || src.startsWith('blob:') || src.includes('/image-proxy')) {
-      return null;
-    }
-    if (src.startsWith('http://') || src.startsWith('https://')) {
-      return src;
-    }
-    if (src.startsWith('//')) {
-      return 'https:' + src;
-    }
-    if (articleUrl) {
-      try {
-        return new URL(src, articleUrl).href;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  function buildProxyUrl(absSrc: string): string {
-    let url = `${proxyBase}?url=${encodeURIComponent(absSrc)}`;
-    if (articleUrl) {
-      url += `&ref=${encodeURIComponent(articleUrl)}`;
-    }
-    return url;
-  }
-
-  let result = html.replace(
-    /<source\s([^>]*?)srcset\s*=\s*("([^"]+)"|'([^']+)')([^>]*?)\s*\/?>/gi,
-    (match, _before, _quoted, dqSrcset, sqSrcset, _after) => {
-      const srcset = dqSrcset ?? sqSrcset;
-      const rewritten = rewriteSrcset(srcset, articleUrl);
-      return match.replace(
-        new RegExp(`srcset\\s*=\\s*("${escapeRegex(srcset)}"|'${escapeRegex(srcset)}')`, 'i'),
-        `srcset="${rewritten}"`
-      );
-    }
-  );
-
-  result = result.replace(
-    /<img\s([^>]*?)src\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)\s*\/?>/gi,
-    (match, _before, _quoted, dqSrc, sqSrc, unqSrc, _after) => {
-      const src = dqSrc ?? sqSrc ?? unqSrc;
-      const absSrc = resolveSrc(src);
-      if (!absSrc) return match;
-      const proxyUrl = buildProxyUrl(absSrc);
-      let newMatch = match.replace(
-        new RegExp(`src\\s*=\\s*("${escapeRegex(src)}"|'${escapeRegex(src)}'|${escapeRegex(src)})`, 'i'),
-        `src="${proxyUrl}"`
-      );
-      const srcsetMatch = newMatch.match(/srcset\s*=\s*("([^"]+)"|'([^']+)')/i);
-      if (srcsetMatch) {
-        const originalSrcset = srcsetMatch[2] ?? srcsetMatch[3];
-        const rewritten = rewriteSrcset(originalSrcset, articleUrl);
-        newMatch = newMatch.replace(
-          new RegExp(`srcset\\s*=\\s*("${escapeRegex(originalSrcset)}"|'${escapeRegex(originalSrcset)}')`, 'i'),
-          `srcset="${rewritten}"`
-        );
-      }
-      return newMatch;
-    }
-  );
-
-  result = result.replace(
-    /<style[^>]*>([\s\S]*?)<\/style>/gi,
-    (match, cssContent: string) => {
-      const rewritten = cssContent.replace(
-        /url\(\s*["']?([^"'\s\)]+)["']?\s*\)/gi,
-        (urlMatch, cssUrl: string) => {
-          const absSrc = resolveSrc(cssUrl);
-          if (!absSrc) return urlMatch;
-          const proxyUrl = buildProxyUrl(absSrc);
-          return `url("${proxyUrl}")`;
-        }
-      );
-      return match.replace(cssContent, rewritten);
-    }
-  );
-
-  result = result.replace(
-    /style\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/gi,
-    (match, styleValue: string) => {
-      const quote = styleValue[0];
-      const content = styleValue.slice(1, -1);
-      const rewritten = content.replace(
-        /url\(\s*["']?([^"'\s\)]+)["']?\s*\)/gi,
-        (urlMatch, cssUrl: string) => {
-          const absSrc = resolveSrc(cssUrl);
-          if (!absSrc) return urlMatch;
-          const proxyUrl = buildProxyUrl(absSrc);
-          return `url("${proxyUrl}")`;
-        }
-      );
-      if (rewritten === content) return match;
-      return `style=${quote}${rewritten}${quote}`;
-    }
-  );
-
-  return result;
-}
-
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -407,6 +292,9 @@ export default function Reader({
     };
   }, [item?.id, item?.link, settings.openArticleMode]);
 
+  // rAF 句柄须先于使用它的 effect 声明，避免 TDZ 隐患（此前声明在 cleanup effect 之后）
+  const rafRef = useRef<number | null>(null);
+
   // 清理 rAF
   useEffect(() => {
     return () => {
@@ -422,7 +310,6 @@ export default function Reader({
     onToggleRead(item.id, true);
   }, [item?.id, item?.isRead, settings.markReadMode, onToggleRead]);
 
-  const rafRef = useRef<number | null>(null);
   const onScroll = useCallback(() => {
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {

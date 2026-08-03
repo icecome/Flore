@@ -114,7 +114,8 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 
 	source, err := s.GetSource(sourceID)
 	if err != nil {
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, fmt.Sprintf("source not found: %v", err), 0, source.Interval)
+		// GetSource 失败时 source 为 nil，不可解引用其字段（Interval），否则 panic
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, fmt.Sprintf("source not found: %v", err), 0, 0)
 		return 0, fmt.Errorf("source not found: %w", err)
 	}
 
@@ -217,7 +218,16 @@ func (s *ReaderService) BuildFetchHTTPClient() *http.Client {
 		proxyURL := s.GetSetting("proxyUrl")
 		if proxyURL != "" {
 			if u, err := url.Parse(proxyURL); err == nil {
-				transport = &http.Transport{Proxy: http.ProxyURL(u)}
+				// 代理分支同样必须套用 SSRF DialContext（私有 IP 拦截 + 防 DNS rebinding），
+				// 否则攻击者可借代理将抓取请求导向内网地址（SSRF）。
+				// 连接池参数与直连分支保持一致，避免高并发下打满连接。
+				transport = &http.Transport{
+					Proxy:               http.ProxyURL(u),
+					DialContext:         newSSRFDialContext(),
+					MaxIdleConns:        200,
+					MaxIdleConnsPerHost: 50,
+					IdleConnTimeout:     120 * time.Second,
+				}
 			}
 		}
 	}
@@ -228,6 +238,13 @@ func (s *ReaderService) BuildFetchHTTPClient() *http.Client {
 	client := &http.Client{
 		Timeout:   time.Duration(timeoutSec) * time.Second,
 		Transport: transport,
+		// 限制重定向次数（默认 10），防止恶意源构造无限重定向循环耗尽请求
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after %d redirects", len(via))
+			}
+			return nil
+		},
 	}
 
 	jar, err := cookiejar.New(nil)
@@ -295,10 +312,15 @@ func FetchRSSFeedWithClient(ctx context.Context, rawURL string, client *http.Cli
 		return nil, meta, fmt.Errorf("feed returned HTTP %d", resp.StatusCode)
 	}
 
-	// 限制响应体大小为 16MB，防止恶意 RSS 源导致 OOM
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	// 限制响应体大小为 16MB，防止恶意 RSS 源导致 OOM。
+	// 多读 1 字节用于检测截断：超出上限时显式报错，而非静默截断后给解析器半截 XML。
+	const maxFeedBody = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBody+1))
 	if err != nil {
 		return nil, meta, err
+	}
+	if len(body) > maxFeedBody {
+		return nil, meta, fmt.Errorf("feed body exceeds %d bytes limit", maxFeedBody)
 	}
 
 	// 通过检查 XML 根元素判断 feed 类型：Atom 的根元素是 <feed>，RSS 的根元素是 <rss>
@@ -404,9 +426,13 @@ func FetchFeedTitle(ctx context.Context, rawURL string, client *http.Client) (st
 		return "", fmt.Errorf("feed returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	const maxFeedBody = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBody+1))
 	if err != nil {
 		return "", err
+	}
+	if len(body) > maxFeedBody {
+		return "", fmt.Errorf("feed body exceeds %d bytes limit", maxFeedBody)
 	}
 
 	bodyStr := string(body)
@@ -464,10 +490,11 @@ func (s *ReaderService) upsertFeedItems(sourceID int, items []FeedItem) (int, er
 		s.invalidateUnreadCount()
 		// 将新文章 ID 推入批量索引通道，由后台 goroutine 异步处理 FTS5 + 过滤规则
 		// 使用非阻塞发送：通道满时跳过，不影响核心抓取流程
+		// 注意：不可在此 Add(1) —— 无配对 Done 会导致 WaitGroup 计数泄漏，
+		// 且 WaitIndexChan 已无调用方（索引进度由 worker 自身生命周期管理）。
 		for _, id := range newItemIDs {
 			select {
 			case s.indexChan <- id:
-				s.indexWG.Add(1)
 			default:
 				// 通道满，降级为同步处理，避免阻塞 worker
 				if err := s.indexBatch([]int{id}); err != nil {

@@ -199,6 +199,48 @@ func ValidateURLOnly(rawURL string) error {
 	return nil
 }
 
+// newSSRFDialContext 返回带 SSRF 防护的 DialContext：
+//   - 拦截私有/保留 IP 字面量；
+//   - 域名解析使用带缓存的结果，并直接用解析出的 IP 建连，
+//     保证"校验的 IP = 连接的 IP"，消除 ValidateURL 与 Dial 之间的 DNS rebinding TOCTOU。
+// 供 TransportWithSSRFProtection 与代理分支 transport 共用。
+func newSSRFDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+
+		// IP 字面量：无 DNS 参与，直接校验并建连（不存在 rebinding 风险）
+		if ip := net.ParseIP(host); ip != nil {
+			if isPrivateIP(host) {
+				return nil, fmt.Errorf("blocked connection to private IP %s", host)
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+
+		// 域名：使用缓存解析的 IP 列表建连，避免二次解析引入 TOCTOU。
+		// lookupHostWithCache 内部已校验每个 IP 非私有。
+		ips, err := lookupHostWithCache(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var lastErr error
+		for _, ip := range ips {
+			conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, fmt.Errorf("dial %s failed: %w", host, lastErr)
+	}
+}
+
 // TransportWithSSRFProtection returns an http.RoundTripper that blocks connections
 // to private/reserved IP addresses during dial phase (defense-in-depth against DNS rebinding).
 //
@@ -207,27 +249,7 @@ func ValidateURLOnly(rawURL string) error {
 // 在 ValidateURL 通过后让 Dial 实际连接到私有 IP。
 func TransportWithSSRFProtection() *http.Transport {
 	return &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				host = addr
-			}
-
-			// IP 字面量直接检查
-			if isPrivateIP(host) {
-				return nil, fmt.Errorf("blocked connection to private IP %s", host)
-			}
-
-			// 使用缓存 DNS 解析，TTL 内命中缓存，之后刷新（保留安全检查）
-			if _, err := lookupHostWithCache(ctx, host); err != nil {
-				return nil, err
-			}
-
-			return (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext(ctx, network, addr)
-		},
+		DialContext:         newSSRFDialContext(),
 		MaxIdleConns:        200,
 		MaxIdleConnsPerHost: 50,
 		IdleConnTimeout:     120 * time.Second,

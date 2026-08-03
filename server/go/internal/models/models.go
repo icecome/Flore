@@ -70,9 +70,9 @@ type Item struct {
 // ItemWithSource 用于返回文章及其源信息
 type ItemWithSource struct {
 	Item
-	SourceName     string `json:"sourceName"`
-	SourceURL      string `json:"sourceUrl"`
-	SourceFolderID *int   `json:"sourceFolderId" gorm:"column:source_folder_id"`
+	SourceName     string  `json:"sourceName"`
+	SourceURL      string  `json:"sourceUrl"`
+	SourceFolderID *int    `json:"sourceFolderId" gorm:"column:source_folder_id"`
 }
 
 // ItemSearch FTS5 全文搜索虚拟表（仅用于 GORM 查询，实际建表使用原生 SQL）

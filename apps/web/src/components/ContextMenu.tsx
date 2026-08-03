@@ -57,14 +57,14 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
   return (
     <div
       ref={ref}
-      className="fixed z-[2000] min-w-[160px] bg-elevated border border-border rounded-md shadow-lg py-1.5 flex flex-col animate-modal-fade-in"
+      className="fixed z-[2000] min-w-[168px] bg-surface border border-strong rounded-md shadow-[var(--shadow-xl)] py-1.5 flex flex-col animate-modal-scale-in"
       style={{ left: adjustedX, top: adjustedY }}
       role="menu"
       aria-orientation="vertical"
     >
       {items.map((item) =>
         item.separator ? (
-          <div key={item.id} className="h-px bg-border my-1 mx-2.5" role="separator" />
+          <div key={item.id} className="h-px bg-border-strong my-1 mx-3" role="separator" />
         ) : (
           <button
             key={item.id}
@@ -86,7 +86,7 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
               'transition-colors duration-150',
               item.danger
                 ? 'text-danger hover:bg-danger-subtle'
-                : 'text-primary hover:bg-hover',
+                : 'text-primary hover:bg-primary-subtle',
               item.disabled && 'opacity-40 cursor-not-allowed'
             )}
             role="menuitem"

@@ -29,6 +29,11 @@ func unzipSafe(zipPath, dest string) error {
 			continue
 		}
 		target := filepath.Join(dest, name)
+		// 二次断言：规范化后的目标路径必须仍在 dest 之内（纵深防御，
+		// 防 filepath.Join 与字符串检查之间的边界差异绕过）。
+		if target != dest && !strings.HasPrefix(target, dest+string(os.PathSeparator)) {
+			continue
+		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -56,7 +58,7 @@ func main() {
 		Height:           860,
 		MinWidth:         900,
 		MinHeight:        600,
-		Frameless:        true,
+		Frameless:        runtime.GOOS != "darwin",
 		WindowStartState: startState,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
@@ -80,6 +82,9 @@ func main() {
 		// 避免默认散落到 %APPDATA%\[BinaryName.exe]，也不污染 data/。
 		Windows: &windows.Options{
 			WebviewUserDataPath: app.webviewDataPath(),
+		},
+		Mac: &mac.Options{
+			TitleBar: mac.TitleBarHidden(),
 		},
 		Linux: &linux.Options{
 			Icon: appIcon,

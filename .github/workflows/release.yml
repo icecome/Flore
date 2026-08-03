@@ -9,8 +9,8 @@
 #      - wails build -> package-tool portable 产出 flore-portable-windows-amd64-<version>.zip
 #      - makensis + package-tool setup 产出 flore-setup-windows-amd64-<version>.exe
 #   2) release 作业：
-#      - R2：上传 Windows 便携包 + update.json
-#      - GitHub Release：Windows 便携包 + 安装 exe + update.json
+#      - R2：仅上传 Windows 安装包（自动更新源）+ update.json（manifest 仅含 setup variant）
+#      - GitHub Release：Windows 便携包 + 安装 exe + update.json（供手动下载）
 #
 # 备注：macOS/Linux 暂时注释，待问题解决后再开启。
 #
@@ -96,8 +96,8 @@ jobs:
           VERSION="${VERSION#v}"
           cd apps/desktop
 
-          # 生成 version.go
-          node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"' + '$VERSION' + '\"\n')"
+          # 生成 version.go 并同步 wails.json productVersion
+          node sync-version.mjs "$VERSION"
 
           # 构建后端二进制
           BE_BIN="build/bin/florebackend.exe"
@@ -189,6 +189,7 @@ jobs:
             -githubRepo icecome/Flore \
             -notes "Flore ${{ steps.ver.outputs.tag }}" \
             -platforms windows \
+            -variant setup \
             -out ./build/update.json
 
       - name: Upload to Cloudflare R2

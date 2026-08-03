@@ -41,6 +41,8 @@ interface WailsApp {
   CheckForUpdate?: () => Promise<UpdateInfo | null>;
   /** 应用已检查的更新（会触发应用重启） */
   StartUpdate?: () => Promise<void>;
+  /** 返回当前操作系统标识（"windows"、"darwin"、"linux"） */
+  GetPlatform?: () => Promise<string>;
 }
 
 interface WailsRuntime {
@@ -58,6 +60,17 @@ export function getDesktopApp(): WailsApp | undefined {
 
 export function isDesktop(): boolean {
   return !!getWailsApp()?.GetBackendStatus;
+}
+
+/** 获取当前操作系统标识，Web 模式下返回空串 */
+export async function getPlatform(): Promise<string> {
+  const app = getWailsApp();
+  if (!app?.GetPlatform) return '';
+  try {
+    return await app.GetPlatform();
+  } catch {
+    return '';
+  }
 }
 
 /** 尝试通过桌面端 Wails runtime 写入剪贴板 */
@@ -583,9 +596,14 @@ export function getImageProxyBase(): string {
   return `${getApi()}/image-proxy`;
 }
 
-/** 站点图标代理前缀，后端经国内图标服务拉取 favicon，避免直接向第三方泄露订阅域名 */
+/** 站点图标代理前缀（Yandex 服务） */
 export function getFaviconProxyBase(): string {
   return `${getApi()}/favicon-proxy`;
+}
+
+/** 直接抓取头像代理前缀（后端从源站抓 favicon.ico） */
+export function getFaviconDirectBase(): string {
+  return `${getApi()}/favicon-direct`;
 }
 
 /** 原文最小代理地址（网页模式回退） */

@@ -204,7 +204,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       setSelectedItem(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSearchMode, searchKeyword, filter, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
+  }, [isSearchMode, searchKeyword, filter, selectedSourceId, selectedFolderId, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
 
   return {
     items,
