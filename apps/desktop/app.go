@@ -705,8 +705,19 @@ func (a *App) findGoBackend() string {
 	return a.findBackendByExecutable(targetName)
 }
 
-// findBackendByExecutable 从可执行文件所在目录向上遍历（最多 3 层），查找后端可执行文件。
+// findBackendByExecutable 从可执行文件所在目录向上遍历，查找后端可执行文件。
 // 限制查找深度避免在高层目录意外命中同名不可信文件。
+//
+// 深度说明（以 macOS .app 包为例，可执行文件位于 flore.app/Contents/MacOS/Flore）：
+//
+//	depth 0: flore.app/Contents/MacOS
+//	depth 1: flore.app/Contents
+//	depth 2: flore.app
+//	depth 3: flore.app 的父目录（便携版 florebackend 与 flore.app 同级的目录）
+//
+// 因此必须查到 depth 3，maxDepth 取 4（循环在 depth>=maxDepth 时停止，
+// 故 4 才会把 depth 3 这一层也纳入检查）。Windows 下 Flore.exe 与
+// florebackend.exe 同目录，depth 0 即可命中，不受影响。
 func (a *App) findBackendByExecutable(targetName string) string {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -718,7 +729,7 @@ func (a *App) findBackendByExecutable(targetName string) string {
 	}
 
 	appDir := filepath.Dir(exePath)
-	const maxDepth = 3
+	const maxDepth = 4
 	depth := 0
 	for dir := appDir; dir != "" && dir != filepath.Dir(dir) && depth < maxDepth; dir = filepath.Dir(dir) {
 		for _, c := range []string{

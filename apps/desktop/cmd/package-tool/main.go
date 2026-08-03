@@ -170,8 +170,14 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	if _, err = io.Copy(out, in); err != nil {
+		return err
+	}
+	// 保留源文件权限（含可执行位），否则拷贝后二进制丢失 +x，压缩包解压将无法运行
+	if fi, err := os.Stat(src); err == nil {
+		_ = os.Chmod(dst, fi.Mode().Perm())
+	}
+	return nil
 }
 
 func zipDir(src, dest string) error {
@@ -194,13 +200,24 @@ func zipDir(src, dest string) error {
 		if rel == "." {
 			return nil
 		}
-		if info.IsDir() {
-			_, err := zw.Create(rel + "/")
-			return err
-		}
-		w, err := zw.Create(rel)
+		// 用 FileInfoHeader + SetMode 保留 Unix 权限（含可执行位），
+		// 否则解压后的二进制丢失 +x，macOS 无法启动应用。
+		fh, err := zip.FileInfoHeader(info)
 		if err != nil {
 			return err
+		}
+		fh.Name = rel
+		if info.IsDir() {
+			fh.Name += "/"
+			fh.Method = zip.Store
+		}
+		fh.SetMode(info.Mode())
+		w, err := zw.CreateHeader(fh)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
 		}
 		in, err := os.Open(p)
 		if err != nil {
