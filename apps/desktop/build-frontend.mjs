@@ -28,7 +28,7 @@ if (mode === 'install') {
 } else {
   // 预清理 dist 目录，避免 Vite 的 emptyDir 被 safe-delete shim 拦截
   if (existsSync(distSource)) {
-    execSync(`rm -rf "${distSource}"`, { stdio: 'ignore' });
+    try { rmSync(distSource, { recursive: true, force: true }); } catch { execSync(`rm -rf "${distSource}"`, { stdio: 'ignore' }); }
   }
   execSync('npm run build', { cwd: webDir, stdio: 'inherit' });
   if (existsSync(distTarget)) {

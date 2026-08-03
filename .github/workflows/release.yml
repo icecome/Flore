@@ -1,28 +1,28 @@
-# Release workflow for Flore (W3 自动更新分发，跨平台构建).
+# Release workflow for Flore (W3 自动更新分发).
 #
 # 触发：
 #   - 推送 v* 标签（如 v0.1.0-20260802）自动发布
 #   - workflow_dispatch 手动填写版本号发布
 #
 # 流程：
-#   1) build 矩阵（windows/macos/ubuntu）各自构建：
-#      - wails build -> package-tool portable 产出 flore-portable-<os>-<arch>-<version>.zip
-#      - Windows 额外：makensis + package-tool setup 产出 flore-setup-windows-amd64-<version>.exe
-#   2) release 作业汇总所有产物 -> gen-manifest（仅 windows 入 manifest）-> 上传 R2
-#      -> 发 GitHub Release（含全部平台 zip + 安装包 exe + update.json）
+#   1) build（仅 Windows）：
+#      - wails build -> package-tool portable 产出 flore-portable-windows-amd64-<version>.zip
+#      - makensis + package-tool setup 产出 flore-setup-windows-amd64-<version>.exe
+#   2) release 作业：
+#      - R2：上传 Windows 便携包 + update.json
+#      - GitHub Release：Windows 便携包 + 安装 exe + update.json
 #
-# 命名规范（统一所有分发包）：
-#   flore-portable-<os>-<arch>-<version>.zip       便携版
-#   flore-setup-<os>-<arch>-<version>.exe           安装版（仅 Windows，NSIS）
+# 备注：macOS/Linux 暂时注释，待问题解决后再开启。
+#
+# 命名规范：
+#   flore-portable-windows-amd64-<version>.zip    便携版
+#   flore-setup-windows-amd64-<version>.exe       安装版（NSIS）
 #
 # 所需 GitHub Secrets：
 #   R2_ACCOUNT_ID          Cloudflare 账户 ID
 #   R2_ACCESS_KEY_ID       R2 S3 兼容访问密钥 ID
 #   R2_SECRET_ACCESS_KEY   R2 S3 兼容私密访问密钥
 #   R2_BUCKET_NAME         R2 存储桶名称
-#
-# 前置：Cloudflare R2 存储桶需绑定自定义域 cdn-dl.icecome.com（公开访问），
-#       否则 update.json 与 zip 的公网 URL 无法解析。
 
 name: Release
 
@@ -41,20 +41,22 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
+    # TODO: 恢复 macOS/Linux 构建（待问题排查完成后取消注释）
+    # strategy:
+    #   fail-fast: false
+    #   matrix:
+    #     include:
+    #       - os: windows-latest
+    #         goos: windows
+    #         goarch: amd64
+    #       - os: macos-latest
+    #         goos: darwin
+    #         goarch: arm64
+    #       - os: ubuntu-latest
+    #         goos: linux
+    #         goarch: amd64
+    #     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,13 +70,13 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Linux build deps
-        if: matrix.goos == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev
-          # 创建 pkg-config 兼容 symlink，让需要 webkit2gtk-4.0 的构建也能找到 4.1
-          sudo ln -sf webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc 2>/dev/null || true
+      # TODO: macOS/Linux 依赖安装（待恢复构建时取消注释）
+      # - name: Install Linux build deps
+      #   if: matrix.goos == 'linux'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev
+      #     sudo ln -sf webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc 2>/dev/null || true
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -98,8 +100,7 @@ jobs:
           node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"' + '$VERSION' + '\"\n')"
 
           # 构建后端二进制
-          BE_BIN="build/bin/florebackend"
-          if [ "${{ matrix.goos }}" = "windows" ]; then BE_BIN="build/bin/florebackend.exe"; fi
+          BE_BIN="build/bin/florebackend.exe"
           cd ../../server/go
           mkdir -p $(dirname "../../apps/desktop/$BE_BIN")
           go build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION" -o "../../apps/desktop/$BE_BIN" ./cmd/main.go
@@ -113,35 +114,29 @@ jobs:
           cp installer/wails_tools.nsh build/windows/installer/
 
           # 便携版
-          FE_BIN=build/bin/Flore
-          if [ "${{ matrix.goos }}" = "windows" ]; then FE_BIN=build/bin/Flore.exe; fi
-          if [ "${{ matrix.goos }}" = "darwin" ]; then FE_BIN=build/bin/Flore.app; fi
-          go run ./cmd/package-tool -edition portable -version "$VERSION" -os ${{ matrix.goos }} -arch ${{ matrix.goarch }} -feBin "$FE_BIN" -clean false
+          FE_BIN=build/bin/Flore.exe
+          go run ./cmd/package-tool -edition portable -version "$VERSION" -os windows -arch amd64 -feBin "$FE_BIN" -clean false
 
-          # Windows 安装版（仅此平台）
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            choco install nsis -y
-            # Chocolatey 安装 NSIS 到 C:\Program Files (x86)\NSIS\，但可能不在 PATH 中
-            MAKENSIS=""
-            for p in "/c/Program Files (x86)/NSIS/makensis.exe" "/c/ProgramData/chocolatey/lib/nsis/tools/makensis.exe"; do
-              if [ -f "$p" ]; then MAKENSIS="$p"; break; fi
-            done
-            if [ -z "$MAKENSIS" ]; then
-              echo "makensis.exe not found"; exit 1
-            fi
-            "$MAKENSIS" -DARG_WAILS_AMD64_BINARY="build\bin\Flore.exe" installer.nsi
-            go run ./cmd/package-tool -edition setup -version "$VERSION" -os windows -arch amd64 -setupBin build/bin/Flore-installer.exe
-            # 清理便携目录（NSIS 已用毕）
-            rm -rf build/Flore-portable
+          # Windows 安装版
+          choco install nsis -y
+          MAKENSIS=""
+          for p in "/c/Program Files (x86)/NSIS/makensis.exe" "/c/ProgramData/chocolatey/lib/nsis/tools/makensis.exe"; do
+            if [ -f "$p" ]; then MAKENSIS="$p"; break; fi
+          done
+          if [ -z "$MAKENSIS" ]; then
+            echo "makensis.exe not found"; exit 1
           fi
+          "$MAKENSIS" -DARG_WAILS_AMD64_BINARY="build\bin\Flore.exe" installer.nsi
+          go run ./cmd/package-tool -edition setup -version "$VERSION" -os windows -arch amd64 -setupBin build/bin/Flore-installer.exe
+          rm -rf build/Flore-portable
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flore-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: flore-windows-amd64
           path: |
-            apps/desktop/build/flore-portable-${{ matrix.goos }}-${{ matrix.goarch }}-*.zip
-            apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.exe
+            apps/desktop/build/flore-portable-windows-amd64-*.zip
+            apps/desktop/build/flore-setup-windows-amd64-*.exe
 
   release:
     needs: build
@@ -184,7 +179,7 @@ jobs:
           cp artifacts/flore-*/* apps/desktop/build/
           ls -la apps/desktop/build/
 
-      - name: Generate update manifest (windows only)
+      - name: Generate update manifest
         run: |
           cd apps/desktop
           go run ./cmd/gen-manifest \
@@ -205,7 +200,8 @@ jobs:
           AWS_EC2_METADATA_DISABLED: true
         run: |
           V="${{ steps.ver.outputs.version }}"
-          aws s3 cp "apps/desktop/build/flore-portable-windows-amd64-${V}.zip" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
+          # R2 只上传安装包（自动更新源），不上传便携包
+          aws s3 cp "apps/desktop/build/flore-setup-windows-amd64-${V}.exe" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
           aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/update.json"
 
       - name: Publish GitHub Release
@@ -214,7 +210,7 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Flore ${{ steps.ver.outputs.tag }}
           files: |
-            apps/desktop/build/flore-portable-*.zip
-            apps/desktop/build/flore-setup-*.exe
+            apps/desktop/build/flore-portable-windows-amd64-*.zip
+            apps/desktop/build/flore-setup-windows-amd64-*.exe
             apps/desktop/build/update.json
           fail_on_unmatched_files: true
