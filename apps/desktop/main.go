@@ -11,12 +11,16 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed build/appicon.png
+var appIcon []byte
 
 // singleInstanceUniqueId 单实例互斥体标识。
 // 必须是固定串：同一份安装的多次启动才能互相识别（C3）。
@@ -76,6 +80,9 @@ func main() {
 		// 避免默认散落到 %APPDATA%\[BinaryName.exe]，也不污染 data/。
 		Windows: &windows.Options{
 			WebviewUserDataPath: app.webviewDataPath(),
+		},
+		Linux: &linux.Options{
+			Icon: appIcon,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

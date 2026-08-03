@@ -63,7 +63,7 @@ export function useSourcesData(
       } else if (selectedFolderId !== null) {
         params.append('folderId', String(selectedFolderId));
       }
-      if (settings.hidePrivateInTimeline && selectedSourceId === null && selectedFolderId === null) {
+      if (settings.hidePrivateInTimeline) {
         params.append('hidePrivate', 'true');
       }
       params.append('unread', 'true');
@@ -80,6 +80,11 @@ export function useSourcesData(
     fetchSources();
     fetchFolders();
   }, [fetchSources, fetchFolders]);
+
+  // 选中文件夹/源变化时刷新订阅源列表，确保侧边栏未读计数与文章列表一致
+  useEffect(() => {
+    fetchSources();
+  }, [selectedSourceId, selectedFolderId, fetchSources]);
 
   // 源健康启动检测：首次加载源后，若存在异常源则提示用户
   const healthCheckedRef = useRef(false);

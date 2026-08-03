@@ -556,7 +556,7 @@ const SourceRow = React.memo(function SourceRow({
         {bad ? (
           <AlertTriangle size={13} className="ml-auto shrink-0 text-danger" />
         ) : source.unreadCount > 0 ? (
-          <span className="ml-auto shrink-0 text-[11px] font-medium text-muted">
+          <span className="ml-auto shrink-0 rounded-full bg-hover px-1.5 text-[11px] font-medium text-muted">
             {source.unreadCount}
           </span>
         ) : null}

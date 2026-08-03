@@ -408,14 +408,9 @@ func (a *App) startBackends() {
 		"FLORE_LOG_FILE": filepath.Join(filepath.Dir(dbPath), "florebackend.log"),
 		// 本地敏感接口鉴权 token，避免同机任意进程直接删除订阅源/导出数据库（M5）
 		"FLORE_API_TOKEN": a.apiToken,
-		// 桌面端前端 origin 可能是 Wails dev server 或 wails.localhost，
-		// 必须全部加入 CORS 白名单，否则前端 fetch 会被拒绝。
-		// 注意：gin-contrib/cors 要求 origin 必须以 http:// 或 https:// 开头，
-		// 不能使用 wails:// scheme。
-		"CORS_ORIGINS": fmt.Sprintf(
-			"http://127.0.0.1:%d,http://localhost:%d,http://localhost:34115,http://wails.localhost,https://wails.localhost",
-			port, port,
-		),
+		// 不设置 CORS_ORIGINS：后端默认走 AllowOriginFunc 动态反射本地源，
+		// 放行 127.0.0.1/localhost 动态端口与 WebView 的 opaque origin（null），
+		// 拒绝任意外网源。Web 部署时手动设置 CORS_ORIGINS=* 或具体域名放开。
 	})
 
 	// startProcess 失败（返回 nil）时不记录 port，避免后续 getSetting 向未监听端口发起请求触发超时

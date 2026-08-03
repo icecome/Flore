@@ -175,6 +175,16 @@ func gracefulShutdown(srv *http.Server, scheduler *services.Scheduler, coordinat
 	slog.Info("server exited")
 }
 
+// buildCORSConfig 跨域来源校验。
+//   - 显式设置 CORS_ORIGINS=* 或具体域名：Web 部署场景，沿用旧逻辑放开。
+//   - 未设置（桌面场景默认）：用 AllowOriginFunc 动态反射本地源，
+//     放行 127.0.0.1/localhost 动态端口与 WebView 的 opaque origin
+//     （Origin 为 "" 或 "null"，常见于 Linux/macOS 的 WebKit 无真实源请求），
+//     拒绝任意外网源，避免绑定 127.0.0.1 时被本机恶意网页读取数据。
+//
+// 注意：AllowOriginFunc 与 AllowAllOrigins 互斥；AllowCredentials 必须为 false，
+// 否则 gin-contrib/cors 会因「* + credentials」直接 panic。前端 fetch 不带凭证，
+// 后端写接口由 FLORE_API_TOKEN 保护，安全边界不受影响。
 func buildCORSConfig() cors.Config {
 	config := cors.Config{
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -184,17 +194,28 @@ func buildCORSConfig() cors.Config {
 	}
 
 	envCORSOrigins := os.Getenv("CORS_ORIGINS")
-	if envCORSOrigins == "*" {
+	switch {
+	case envCORSOrigins == "*":
+		// Web 部署：显式放开任意源（需配合 AllowCredentials=false）。
 		config.AllowAllOrigins = true
-	} else if envCORSOrigins != "" {
+	case envCORSOrigins != "":
+		// Web 部署：指定具体允许源。
 		config.AllowOrigins = strings.Split(envCORSOrigins, ",")
-	} else {
-		config.AllowOrigins = []string{
-			"http://localhost:3000",
-			"http://localhost:5173",
-			"http://localhost:34115",
-			"http://wails.localhost",
-			"https://wails.localhost",
+	default:
+		// 桌面默认：动态反射本地源，含 WebView 的 opaque origin。
+		config.AllowOriginFunc = func(origin string) bool {
+			if origin == "" || origin == "null" {
+				return true
+			}
+			switch {
+			case strings.HasPrefix(origin, "http://127.0.0.1:"),
+				strings.HasPrefix(origin, "http://localhost:"),
+				strings.HasPrefix(origin, "https://localhost:"),
+				origin == "http://wails.localhost",
+				origin == "https://wails.localhost":
+				return true
+			}
+			return false
 		}
 	}
 	return config

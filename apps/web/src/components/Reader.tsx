@@ -111,8 +111,9 @@ function rewriteImageUrls(html: string, articleUrl?: string): string {
 
   // 1. 懒加载：data-src 等自定义属性归一到标准 src（在 DOMPurify 剥离 data-* 之前处理）。
   //    仅当标签缺少标准 src 时，才用懒加载地址兜底，避免覆盖已有的真实 src。
+  //    支持自关闭标签 <img ... /> 和标准标签 <img ... >
   result = result.replace(
-    /<img\s([^>]*?)(?:data-(?:src|original|lazy-src|original-src|lazy|load-src|loading-src|true-src|default-src))\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)>/gi,
+    /<img\s([^>]*?)(?:data-(?:src|original|lazy-src|original-src|lazy|load-src|loading-src|true-src|default-src))\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)\s*\/?>/gi,
     (match, before, _attr, dq, sq, unq, after) => {
       const lazy = dq ?? sq ?? unq;
       if (!lazy || /(?:\s)src\s*=/.test(match)) return match;
@@ -122,8 +123,9 @@ function rewriteImageUrls(html: string, articleUrl?: string): string {
   );
 
   // 2. <source srcset>（picture 响应式图）
+  //    支持自关闭标签
   result = result.replace(
-    /<source\s([^>]*?)srcset\s*=\s*("([^"]+)"|'([^']+)')([^>]*?)>/gi,
+    /<source\s([^>]*?)srcset\s*=\s*("([^"]+)"|'([^']+)')([^>]*?)\s*\/?>/gi,
     (match, _before, _q, dqSrcset, sqSrcset, _after) => {
       const srcset = dqSrcset ?? sqSrcset;
       const rewritten = rewriteSrcset(srcset, articleUrl);
@@ -135,8 +137,9 @@ function rewriteImageUrls(html: string, articleUrl?: string): string {
   );
 
   // 3. <img src> 与 <img srcset>
+  //    支持自关闭标签 <img ... /> 和标准标签 <img ... >
   result = result.replace(
-    /<img\s([^>]*?)src\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)>/gi,
+    /<img\s([^>]*?)src\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)\s*\/?>/gi,
     (match, _before, _q, dqSrc, sqSrc, unqSrc, _after) => {
       const src = dqSrc ?? sqSrc ?? unqSrc;
       const absSrc = resolveSrc(src);
@@ -257,7 +260,7 @@ function rewriteIframeContent(html: string, articleUrl?: string): string {
   }
 
   let result = html.replace(
-    /<source\s([^>]*?)srcset\s*=\s*("([^"]+)"|'([^']+)')([^>]*?)>/gi,
+    /<source\s([^>]*?)srcset\s*=\s*("([^"]+)"|'([^']+)')([^>]*?)\s*\/?>/gi,
     (match, _before, _quoted, dqSrcset, sqSrcset, _after) => {
       const srcset = dqSrcset ?? sqSrcset;
       const rewritten = rewriteSrcset(srcset, articleUrl);
@@ -269,7 +272,7 @@ function rewriteIframeContent(html: string, articleUrl?: string): string {
   );
 
   result = result.replace(
-    /<img\s([^>]*?)src\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)>/gi,
+    /<img\s([^>]*?)src\s*=\s*("([^"]+)"|'([^']+)'|([^\s>]+))([^>]*?)\s*\/?>/gi,
     (match, _before, _quoted, dqSrc, sqSrc, unqSrc, _after) => {
       const src = dqSrc ?? sqSrc ?? unqSrc;
       const absSrc = resolveSrc(src);
