@@ -14,6 +14,10 @@ export function GetBackendStatus() {
   return window['go']['main']['App']['GetBackendStatus']();
 }
 
+export function GetPlatform() {
+  return window['go']['main']['App']['GetPlatform']();
+}
+
 export function GetVersion() {
   return window['go']['main']['App']['GetVersion']();
 }

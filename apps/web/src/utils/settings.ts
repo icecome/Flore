@@ -160,7 +160,7 @@ export interface AppSettings {
   proxyUrl: string;
 
   // === 隐私 ===
-  loadOnlineAvatar: boolean;
+  faviconMode: 'off' | 'yandex' | 'direct';
 }
 
 const STORAGE_KEY = 'flore-settings';
@@ -228,7 +228,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   proxyUrl: '',
 
   // 隐私
-  loadOnlineAvatar: true,
+  faviconMode: 'off',
 };
 
 // 迁移旧版 mark 已读配置到新字段（优先级：hover > scroll > view）
@@ -280,6 +280,10 @@ function migrateLegacySettings(raw: Record<string, unknown>): Partial<AppSetting
   if (hide) Object.assign(migrated, hide);
   const theme = migrateReaderTheme(raw);
   if (theme) Object.assign(migrated, theme);
+  // loadOnlineAvatar → faviconMode 迁移
+  if (raw.loadOnlineAvatar !== undefined) {
+    migrated.faviconMode = raw.loadOnlineAvatar ? 'yandex' : 'off';
+  }
   return migrated;
 }
 
@@ -349,6 +353,7 @@ const ENUM_VALIDATORS: Partial<Record<keyof AppSettings, readonly string[]>> = {
   openArticleMode: ['rss', 'readability', 'iframe', 'browser'],
   closeBehavior: ['quit', 'tray'],
   minimizeBehavior: ['taskbar', 'tray'],
+  faviconMode: ['off', 'yandex', 'direct'],
 };
 
 /** 校验单个字段值是否合法，不合法则返回 undefined（由调用方回退到默认值） */

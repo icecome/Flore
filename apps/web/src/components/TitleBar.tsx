@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { isDesktop, getDesktopApp } from '../utils/api.js';
+import { isDesktop, getDesktopApp, getPlatform } from '../utils/api.js';
 import { showToast } from '../utils/toast';
 import { RssIcon, MinusIcon, MaximizeIcon, CopyIcon, X } from './icons';
 
@@ -155,9 +155,11 @@ function useWindowState() {
 
 export default function TitleBar() {
   const [desktop, setDesktop] = useState(() => isDesktop());
+  const [platform, setPlatform] = useState('');
 
   useEffect(() => {
     setDesktop(isDesktop());
+    getPlatform().then(setPlatform).catch(() => setPlatform(''));
   }, []);
 
   const runtime = useRuntime();
@@ -166,52 +168,61 @@ export default function TitleBar() {
 
   if (!desktop) return null;
 
+  const isMac = platform === 'darwin';
+
+  // macOS: 原生交通灯在左上角，标题区左移 76px 避开，不渲染自定义按钮
+  // Windows/Linux: 左标题 + 右侧三按钮
   return (
     <div
-      className="flex h-[34px] min-h-[34px] bg-surface border-b border-border-subtle items-center justify-between pl-3.5 select-none"
-      data-wails-drag
+      className={`flex h-[34px] min-h-[34px] bg-surface border-b border-border-subtle items-center select-none ${
+        isMac ? 'pl-[76px]' : 'pl-3.5 justify-between'
+      }`}
+      data-wails-drag={isMac ? undefined : true}
     >
       <div
         className="flex items-center gap-2 flex-1 h-full cursor-default"
         data-wails-drag
-        onMouseDown={handleDragMouseDown}
+        onMouseDown={isMac ? undefined : handleDragMouseDown}
       >
-        <span className="text-primary flex items-center opacity-90" data-wails-drag>
+        <span className="text-primary flex items-center opacity-90">
           <RssIcon size={16} />
         </span>
-        <span className="text-xs font-semibold text-secondary tracking-wide" data-wails-drag>
+        <span className="text-xs font-semibold text-secondary tracking-wide">
           Flore
         </span>
       </div>
-      <div className="flex items-center h-full" data-wails-no-drag>
-        <button
-          className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
-          onClick={() => callWindow('WindowMinimise')}
-          title="最小化"
-          aria-label="最小化窗口"
-          data-wails-no-drag
-        >
-          <MinusIcon size={14} />
-        </button>
-        <button
-          className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
-          onClick={handleMaxRestore}
-          title={maximized ? '还原' : '最大化'}
-          aria-label={maximized ? '还原窗口' : '最大化窗口'}
-          data-wails-no-drag
-        >
-          {maximized ? <CopyIcon size={12} /> : <MaximizeIcon size={12} />}
-        </button>
-        <button
-          className="titlebar-control close w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
-          onClick={() => callWindow('WindowClose')}
-          title="关闭"
-          aria-label="关闭窗口"
-          data-wails-no-drag
-        >
-          <X size={14} />
-        </button>
-      </div>
+
+      {!isMac && (
+        <div className="flex items-center h-full" data-wails-no-drag>
+          <button
+            className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
+            onClick={() => callWindow('WindowMinimise')}
+            title="最小化"
+            aria-label="最小化窗口"
+            data-wails-no-drag
+          >
+            <MinusIcon size={14} />
+          </button>
+          <button
+            className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
+            onClick={handleMaxRestore}
+            title={maximized ? '还原' : '最大化'}
+            aria-label={maximized ? '还原窗口' : '最大化窗口'}
+            data-wails-no-drag
+          >
+            {maximized ? <CopyIcon size={12} /> : <MaximizeIcon size={12} />}
+          </button>
+          <button
+            className="titlebar-control close w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
+            onClick={() => callWindow('WindowClose')}
+            title="关闭"
+            aria-label="关闭窗口"
+            data-wails-no-drag
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

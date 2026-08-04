@@ -395,15 +395,22 @@ func (s *ReaderService) ListBackups() ([]BackupEntry, error) {
 		if err != nil {
 			continue
 		}
-		contents, _ := s.GetBackupContents(e.Name())
-		backups = append(backups, BackupEntry{
+		entry := BackupEntry{
 			Name:    e.Name(),
 			Size:    info.Size(),
 			ModTime: info.ModTime().Format("2006-01-02 15:04:05"),
-			HasDB:   contents.HasDB,
-			HasCfg:  contents.HasCfg,
-			HasOpm:  contents.HasOpm,
-		})
+		}
+		// GetBackupContents 失败时返回 nil 指针（如 zip 损坏），必须处理，
+		// 否则下方解引用 HasDB 会 panic。损坏条目仍展示，便于用户手动删除。
+		contents, err := s.GetBackupContents(e.Name())
+		if err != nil {
+			slog.Warn("list backups: failed to read contents", "name", e.Name(), "error", err)
+		} else if contents != nil {
+			entry.HasDB = contents.HasDB
+			entry.HasCfg = contents.HasCfg
+			entry.HasOpm = contents.HasOpm
+		}
+		backups = append(backups, entry)
 	}
 
 	// 按修改时间倒序

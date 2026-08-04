@@ -79,8 +79,8 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     if (filter === 'readLater') {
       params.append('readLater', 'true');
     }
-    // 全部文章视图下，根据设置隐藏私密订阅源
-    if (settings.hidePrivateInTimeline && selectedSourceId === null && selectedFolderId === null) {
+    // 根据设置隐藏私密订阅源
+    if (settings.hidePrivateInTimeline) {
       params.append('hidePrivate', 'true');
     }
     // 分页加载：每页拉取 PAGE_SIZE 条，offset 由 offsetRef 控制
@@ -103,7 +103,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
         params.append('folderId', String(selectedFolderId));
       }
       // 注意：不添加 filter 参数，确保始终获取全文总数
-      if (settings.hidePrivateInTimeline && selectedSourceId === null && selectedFolderId === null) {
+      if (settings.hidePrivateInTimeline) {
         params.append('hidePrivate', 'true');
       }
       setTotalCount(await countItems(params, signal));
@@ -204,7 +204,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       setSelectedItem(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSearchMode, searchKeyword, filter, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
+  }, [isSearchMode, searchKeyword, filter, selectedSourceId, selectedFolderId, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
 
   return {
     items,

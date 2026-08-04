@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { loadSettings } from '../utils/settings';
 import type { Folder } from '../types';
 import Button from './Button';
+import ContextMenu from './ContextMenu';
 import ModalLayout from './ModalLayout';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { buildInputMenu } from '../utils/contextMenu';
 
 interface Props {
   onClose: () => void;
@@ -34,16 +37,30 @@ function SourceForm({
   folders: Folder[];
   onChange: (field: keyof SourceFormData, value: SourceFormData[keyof SourceFormData]) => void;
 }) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
+  const intervalRef = useRef<HTMLInputElement>(null);
+  const { menuProps, showMenu } = useContextMenu();
   const folderOptions = getSourceFormFolders(folders);
 
   return (
+    <>
     <div className="flex flex-col gap-3">
       <div>
         <label className="block text-sm font-medium text-secondary mb-1.5">名称</label>
         <input
+          ref={nameRef}
           type="text"
           value={form.name}
           onChange={(e) => onChange('name', e.target.value)}
+          onContextMenu={(e) => {
+            const el = nameRef.current;
+            if (!el) return;
+            showMenu(e, buildInputMenu(
+              { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: form.name.length > 0, readOnly: el.readOnly },
+              { onClear: () => onChange('name', '') },
+            ));
+          }}
           className={getInputClasses()}
         />
       </div>
@@ -51,10 +68,19 @@ function SourceForm({
       <div>
         <label className="block text-sm font-medium text-secondary mb-1.5">RSS / Atom URL</label>
         <input
+          ref={urlRef}
           type="url"
           required
           value={form.url}
           onChange={(e) => onChange('url', e.target.value)}
+          onContextMenu={(e) => {
+            const el = urlRef.current;
+            if (!el) return;
+            showMenu(e, buildInputMenu(
+              { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: form.url.length > 0, readOnly: el.readOnly },
+              { onClear: () => onChange('url', '') },
+            ));
+          }}
           className={getInputClasses()}
         />
       </div>
@@ -76,14 +102,25 @@ function SourceForm({
       <div>
         <label className="block text-sm font-medium text-secondary mb-1.5">抓取间隔（分钟）</label>
         <input
+          ref={intervalRef}
           type="number"
           min={5}
           value={form.interval}
           onChange={(e) => onChange('interval', Number(e.target.value))}
+          onContextMenu={(e) => {
+            const el = intervalRef.current;
+            if (!el) return;
+            showMenu(e, buildInputMenu(
+              { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: true, readOnly: el.readOnly },
+              { onClear: () => onChange('interval', 5) },
+            ));
+          }}
           className={getInputClasses()}
         />
       </div>
     </div>
+    {menuProps && <ContextMenu {...menuProps} />}
+    </>
   );
 }
 

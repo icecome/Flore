@@ -193,15 +193,24 @@ func formatJSON(v interface{}) []byte {
 // ExtractDiagnosticPackage extracts a diagnostic zip for user download
 func (h *ReaderHandler) ExtractDiagnosticPackage(c *gin.Context) {
 	zipPath := c.Param("path")
-	if !strings.HasPrefix(zipPath, "/") && !strings.Contains(zipPath, ":") {
+	if zipPath == "" || strings.Contains(zipPath, "..") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid path"})
 		return
 	}
 
-	// Security: only allow files in temp directory
+	// Security: only allow files inside the temp directory.
+	// 必须使用"目录 + 路径分隔符"的前缀判断：仅 HasPrefix(os.TempDir()) 会让
+	// C:\...\Temp2\xxx 因共享 "Temp" 前缀而绕过校验（路径穿越）。
+	tempDir := filepath.Clean(os.TempDir())
 	cleanPath := filepath.Clean(zipPath)
-	if !strings.HasPrefix(cleanPath, os.TempDir()) {
+	if cleanPath != tempDir && !strings.HasPrefix(cleanPath, tempDir+string(os.PathSeparator)) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
+		return
+	}
+
+	// 确认目标为已存在的普通文件（拒绝目录与不存在路径）
+	if fi, err := os.Stat(cleanPath); err != nil || fi.IsDir() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
 		return
 	}
 

@@ -41,12 +41,24 @@ async function downloadItemMarkdown(itemId: number): Promise<void> {
     console.warn('showSaveFilePicker not supported or cancelled', err);
   }
 
-  // 方案3：回退到浏览器静默下载
-  const a = document.createElement('a');
-  a.href = getItemMarkdownUrl(itemId);
-  a.download = `${itemId}.md`;
-  a.click();
-  showToast('正在下载 Markdown...');
+  // 方案3：回退到 fetch + Blob 下载。
+  // 目标 URL 是本应用后端 API（非外部 URL），不受 openExternal 协议白名单约束；
+  // 用 Blob 下载避免跨源时 download 属性失效导致页面跳转，同时补全错误反馈。
+  try {
+    const response = await fetch(getItemMarkdownUrl(itemId));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = `${itemId}.md`;
+    a.click();
+    URL.revokeObjectURL(objectUrl);
+    showToast('正在下载 Markdown...');
+  } catch (err) {
+    console.error('Failed to download markdown:', err);
+    showToast('下载失败，请重试');
+  }
 }
 
 // ---------- Sidebar: 订阅源 ----------

@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Folder, Source } from '../types';
 import Button from './Button';
+import ContextMenu from './ContextMenu';
 import ModalLayout from './ModalLayout';
 import { Toggle } from './settings/SettingsShared';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { buildInputMenu } from '../utils/contextMenu';
 
 interface EditSourceParams {
   sourceId: number;
@@ -29,6 +32,10 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
   const [isPrivate, setIsPrivate] = useState(source.isPrivate ?? false);
   const [hideInTimeline, setHideInTimeline] = useState(source.hideInTimeline ?? false);
 
+  const nameRef = useRef<HTMLInputElement>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
+  const { menuProps, showMenu } = useContextMenu();
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
@@ -38,6 +45,7 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
   };
 
   return (
+    <>
     <ModalLayout title="编辑订阅" onClose={onClose} width={480}>
       <form onSubmit={handleSubmit} className="p-5 px-6 pb-6">
         <div className="mb-5">
@@ -45,9 +53,18 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
           <div className="text-xs text-muted mb-2">此订阅源的自定义标题，留空则使用默认标题。</div>
           <div className="flex items-stretch overflow-hidden rounded-sm border border-border bg-surface focus-within:border-primary">
             <input
+              ref={nameRef}
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onContextMenu={(e) => {
+                const el = nameRef.current;
+                if (!el) return;
+                showMenu(e, buildInputMenu(
+                  { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: name.length > 0, readOnly: el.readOnly },
+                  { onClear: () => setName('') },
+                ));
+              }}
               className="flex-1 px-3 py-[10px] text-base text-primary outline-none placeholder:text-muted"
               placeholder="订阅源名称"
             />
@@ -64,9 +81,18 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
           <div className="mb-5">
           <label className="block text-base font-semibold text-primary mb-1">订阅地址</label>
           <input
+            ref={urlRef}
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            onContextMenu={(e) => {
+              const el = urlRef.current;
+              if (!el) return;
+              showMenu(e, buildInputMenu(
+                { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: url.length > 0, readOnly: el.readOnly },
+                { onClear: () => setUrl('') },
+              ));
+            }}
             className="w-full px-3 py-[10px] border border-border rounded-sm text-base box-border bg-surface text-primary"
             placeholder="https://example.com/feed.xml"
           />
@@ -111,5 +137,7 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
         </div>
       </form>
     </ModalLayout>
+      {menuProps && <ContextMenu {...menuProps} />}
+    </>
   );
 }
