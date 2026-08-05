@@ -33,7 +33,7 @@ func parseMilliTime(value interface{}) (time.Time, error) {
 		if t, err := time.Parse(time.RFC3339, s); err == nil {
 			return t, nil
 		}
-		return time.Time{}, fmt.Errorf("cannot parse time string %q", v)
+		return time.Time{}, fmt.Errorf("cannot parse time string %q", s)
 	case time.Time:
 		return v, nil
 	default:
