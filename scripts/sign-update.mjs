@@ -17,7 +17,7 @@
  */
 
 import { createPrivateKey, createHash, sign } from 'crypto';
-import { readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import https from 'https';
@@ -71,7 +71,15 @@ for (const asset of manifest.assets || []) {
     continue;
   }
   try {
-    const data = await fetchBytes(fileUrl);
+    let data;
+    // 优先用本地已构建文件（CI 离线、可靠），找不到再回退到 urls 拉取
+    const localPath = path.join(path.dirname(manifestPath), asset.fileName);
+    if (existsSync(localPath)) {
+      data = readFileSync(localPath);
+      console.log(`[local] ${asset.fileName}`);
+    } else {
+      data = await fetchBytes(fileUrl);
+    }
     const digest = createHash('sha256').update(data).digest();
     asset.sha256 = digest.toString('hex');
     asset.signature = sign(null, digest, privateKey).toString('base64');

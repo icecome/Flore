@@ -31,13 +31,15 @@ console.log(`sync-version: version.go -> ${version}`);
 // 2) wails.json 的 productVersion（正则替换，保留其余格式与缩进）
 const wailsPath = join(desktopDir, 'wails.json');
 const wailsRaw = readFileSync(wailsPath, 'utf8');
-const updated = wailsRaw.replace(
-  /("productVersion":\s*)"[^"]*"/,
-  `$1"${version}"`
-);
-if (updated === wailsRaw) {
+const prodRe = /("productVersion":\s*)"[^"]*"/;
+if (!prodRe.test(wailsRaw)) {
   console.warn('sync-version: 未在 wails.json 中找到 productVersion，跳过');
 } else {
-  writeFileSync(wailsPath, updated);
-  console.log(`sync-version: wails.json productVersion -> ${version}`);
+  const updated = wailsRaw.replace(prodRe, `$1"${version}"`);
+  if (updated !== wailsRaw) {
+    writeFileSync(wailsPath, updated);
+    console.log(`sync-version: wails.json productVersion -> ${version}`);
+  } else {
+    console.log(`sync-version: wails.json productVersion 已为 ${version}（无需更改）`);
+  }
 }

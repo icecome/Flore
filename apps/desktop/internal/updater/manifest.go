@@ -3,6 +3,7 @@ package updater
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"runtime"
 	"time"
@@ -56,7 +57,16 @@ func manifestURLs() []string {
 
 // FetchManifest 拉取更新清单，主地址失败则回退兜底地址。
 func FetchManifest() (*Manifest, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			ExpectContinueTimeout: 5 * time.Second,
+		},
+	}
 	var lastErr error
 	for _, u := range manifestURLs() {
 		req, err := http.NewRequest(http.MethodGet, u, nil)

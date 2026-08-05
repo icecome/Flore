@@ -204,6 +204,17 @@ jobs:
             -variant setup \
             -out ./build/update.json
 
+      - name: Sign update manifest
+        env:
+          FLORE_UPDATE_SIGNING_KEY: ${{ secrets.FLORE_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$FLORE_UPDATE_SIGNING_KEY" ]; then
+            echo "::warning::未配置 FLORE_UPDATE_SIGNING_KEY，跳过签名（桌面端更新将因验签失败被拒绝）"
+            exit 0
+          fi
+          printf '%s' "$FLORE_UPDATE_SIGNING_KEY" > /tmp/flore-sign.key
+          node scripts/sign-update.mjs apps/desktop/build/update.json /tmp/flore-sign.key
+
       - name: Upload to Cloudflare R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

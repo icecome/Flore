@@ -203,6 +203,7 @@ func ValidateURLOnly(rawURL string) error {
 //   - 拦截私有/保留 IP 字面量；
 //   - 域名解析使用带缓存的结果，并直接用解析出的 IP 建连，
 //     保证"校验的 IP = 连接的 IP"，消除 ValidateURL 与 Dial 之间的 DNS rebinding TOCTOU。
+//
 // 供 TransportWithSSRFProtection 与代理分支 transport 共用。
 func newSSRFDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{

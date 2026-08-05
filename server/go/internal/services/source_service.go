@@ -375,6 +375,7 @@ func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.Null
 // 调度周期统一取全局设置 defaultInterval（UI "默认抓取间隔"），所有订阅源按此周期轮询：
 //   - 新增 >5 条：缩短到最小间隔（fetchMinInterval），尽快拉全
 //   - 否则：按全局间隔轮询（不再无新增即推到 3 天）
+//
 // interval 参数保留以兼容调用链，当前调度不再依赖单源 interval。
 func (s *ReaderService) adaptiveNextCheckAt(interval int, newCount int) int64 {
 	globalInterval := s.GetSettingInt("defaultInterval", 120)

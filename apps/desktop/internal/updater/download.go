@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -13,7 +14,16 @@ import (
 
 // DownloadAsset 按 urls 顺序尝试下载资产到 dest，并校验 sha256，全部失败返回错误。
 func DownloadAsset(asset *Asset, dest string) error {
-	client := &http.Client{Timeout: 30 * time.Minute}
+	client := &http.Client{
+		Timeout: 30 * time.Minute,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			ExpectContinueTimeout: 5 * time.Second,
+		},
+	}
 	var lastErr error
 	for _, u := range asset.URLs {
 		if err := downloadAndVerify(client, u, asset, dest); err != nil {
