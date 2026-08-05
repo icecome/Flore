@@ -124,7 +124,7 @@ func batEscape(s string) string {
 }
 
 // buildApplyScript 生成 Windows 便携包更新脚本。
-// 流程：等待当前进程(PID)退出 → 结束可能残留的后端子进程 → 复制解压文件覆盖安装目录 → 重新拉起主程序。
+// 流程：等待当前进程(PID)退出 → 结束可能残留的后端子进程（Flore.exe --backend）→ 复制解压文件覆盖安装目录 → 重新拉起主程序。
 func buildApplyScript(pid int, srcDir, installDir, exePath string) string {
 	const tpl = `@echo off
 set PID={PID}
@@ -137,7 +137,7 @@ if %errorlevel%==0 (
   timeout /t 1 /nobreak >nul
   goto wait
 )
-taskkill /F /IM florebackend.exe >nul 2>&1
+taskkill /F /IM Flore.exe >nul 2>&1
 timeout /t 1 /nobreak >nul
 xcopy /y /e /i "{SRC}\*" "{DST}\" >nul
 start "" "{SELF}"

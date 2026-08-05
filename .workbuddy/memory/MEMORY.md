@@ -29,7 +29,9 @@
 - **Wails 应用必须用 `wails build`**，禁裸 `go build`（缺 `production` tag 会匹配 `app_default_windows.go` 弹模态 MessageBox 阻塞启动）。手动需 `go build -tags production`。
 - **版本三处同步**：① 根 `package.json` 的 `version`（唯一真源）② `apps/desktop/version.go`（自动生成）③ `apps/desktop/wails.json` 的 `productVersion`（由 `sync-version.mjs` 同步，路径 `../../package.json`）。
 - **ldflags 注入变量须字符串字面量初始化**（禁函数调用初始化器，否则 `-X` 静默失效）。后端注入：`-X github.com/rss/go-server/internal/handlers.appVersion=<ver>`；dev 模式无注入显示 `dev`，可用 `FLORE_VERSION` 覆盖。
+- **⚠️ 自衍生架构后，`wails build` 必须显式传 `-ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=<ver>"`**（2026-08-05 回归教训）：自衍生架构把后端编入主程序后，`build-desktop.mjs`/`release.yml` 曾只调 `wails build` 不带 ldflags → 后端 `appVersion` 恒为 "dev" → 前端"关于"页显示 `Flore vdev`。删除独立 `florebackend` 构建步骤时**必须把 ldflags 迁到 `wails build`**；CI 与本地脚本两处都要。
 - 前端"关于"页版本只走后端 `/api/version`，不走 Wails `GetVersion()`。
+- **TitleBar 窗口状态检测**：`checkState` 中 `GetWindowState`（持久化）与 `WindowIsMaximised`（实时）的 fallback **必须用独立 `if`（`max === undefined &&` 条件）而非 `else if`**——否则 `GetWindowState` 存在但启动早期抛错时被短路，图标永远停在初始"最大化"（dev 分支曾用两个独立 if；2026-08-05 mac 分支 067c90a 改 `else if` 致回归）。
 
 ## 四、macOS 分发（核心：后端自衍生架构）
 **铁律：分发包里只有一个 `Flore.app`，不再有第二个独立 `florebackend` 二进制。主程序以 `--backend` 启动自身子进程跑后端。**
@@ -43,7 +45,18 @@
   - `apps/desktop/go.mod`：`require github.com/rss/go-server` + `replace => ../../server/go`；`go mod tidy` 拉齐 gin/gorm/sqlite。主程序 `Flore` 含后端（~23MB）。
   - `scripts/build-desktop.mjs` 不再单独 `go build florebackend`；`package-tool` 不再拷贝/签名 florebackend，仅收 `Flore.app`。
 - **数据目录**：darwin 跳过包内 `findPortableDataDir()`，直接 `userDataDirectory()` → **`~/.flore`**（始终可写）。改数据路径前必读此条。Windows/Linux 维持原便携判定。
+  - **关键事实（2026-08-05 核实）**：安装版（setup 装到 `AppData\Local\Programs\flore`，User 级无 UAC 可写）因 `findPortableDataDir()`（backend.go:379）在 exe 同目录成功建 `data/`，**数据实际落在安装目录同级的 `data/`**（便携判定的副作用，非显式设计）；仅当 exe 同目录只读（如装到 Program Files）才回退 `%LOCALAPPDATA%\Flore`。`AppData\Local\Flore` 仅是该回退值，正常安装不走。
+  - **产品决策（NSIS 安装，2026-08-05 由方案 A 回退）**：Windows 安装包**恢复用 NSIS 原方式**（`installer.nsi` + `installer/wails_tools.nsh`，CI `release.yml` 跑 `makensis`；本地 `build-desktop.mjs` 仅出便携版）。安装目录 `InstallDir = $LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}`（`AppData\Local\Programs\Flore`），用户数据 `data/` 与程序同目录。NSIS 卸载段 `RMDir /r $INSTDIR` 会一并清除 `data/`——属原方式已知行为，非本轮改动范围。改安装/卸载逻辑前必读「安装器」小节。
 - **验证**：`Flore --backend` 跑同二进制端口正常、`/health` → `{"status":"ok"}`、迁移完成；GUI 常驻时子进程正常存活。headless 下 `wails.Run` 立即返回→shutdown 杀子进程，看不到后端就绪属预期。
+
+### 安装器（NSIS，原方式；方案 A 自写 Go 安装器已于 2026-08-05 弃用回退）
+- **现状**：Windows 安装包走 NSIS 原流程——`installer.nsi` + `installer/wails_tools.nsh`（Wails 模板）；CI `release.yml` 用 `makensis installer.nsi` 产 `build/bin/Flore-installer.exe`，再 `package-tool -edition setup -setupBin build/bin/Flore-installer.exe` 复制重命名为 `flore-setup-windows-amd64-<ver>.exe`。本地 `build-desktop.mjs` 不跑 NSIS（仅便携版），与 NSIS 时代一致。
+- **⚠️ 方案 A 教训（已弃用，留作 Win32 GUI 参考）**：2026-08-05 曾用零依赖自写 Go 安装器替代 NSIS，但真机双击「黑框一闪、无界面」——根因为 GUI 子系统缺失（`go build` 须 `-H windowsgui`）+ `CW_USEDEFAULT` 须 `uintptr(uint32(x))` 传递（否则 `CreateWindowExW` 失败）。本项目当前**不采用**该方案（用户决定回退 NSIS）。若未来重做 Win32 GUI，必读下列铁律：
+  - 本机 `golang.org/x/sys/windows` 为**精简版**，无类型化 Win32 API，须走 `LazyDLL.NewProc(...).Call(...)` 裸调用 + 手写 `wndClassEx`/`msg` 结构体（64 位布局）+ 本地数值常量；**仅发 amd64 Windows**。
+  - `go build` 必须带 `-H windowsgui`，否则双击弹控制台黑框、GUI 失败即一闪而过。
+  - `CW_USEDEFAULT=0x80000000` 以 `int32` 负值表示，直接 `uintptr(int32)` 会被符号扩展为 `0xFFFFFFFF80000000` 致 `CreateWindowExW` 返回 0；须 `uintptr(uint32(x))`。
+  - **headless 限制**：本机无交互桌面会话，`CreateWindowExW` 必返回 NULL（`GetLastError=0`），GUI 窗口无法在本机肉眼验证，须在真实 Windows 确认。
+- **图标**：NSIS 安装包图标由 `installer.nsi` 经 `build/windows/icon.ico` 注入（Wails 模板默认处理）；不再使用 `resource.syso`。
 - **排查"获取失败"**：① `Flore.app/Contents/MacOS/Flore` 应 ~23MB 且 `--backend` 可独立起服务；② `~/".flore"/floredesktop.log` 应有 `spawning backend` 与 `Go backend ready`；③ 前端 `applyBackendStatus` 轮询窗口已对齐后端启动上限（75×200ms≈15s，`apps/web/src/utils/api.ts`）。
 - 首次运行右键"打开"或 `xattr -d com.apple.quarantine Flore.app` 清隔离；单实例锁残留进程会致"只有 dock 图标无窗口"，先 `pkill -f Flore` 再启动。
 

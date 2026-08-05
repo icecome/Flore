@@ -99,25 +99,16 @@ jobs:
           # 生成 version.go 并同步 wails.json productVersion
           node sync-version.mjs "$VERSION"
 
-          # 构建后端二进制
-          BE_BIN="build/bin/florebackend.exe"
-          cd ../../server/go
-          mkdir -p $(dirname "../../apps/desktop/$BE_BIN")
-          go build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION" -o "../../apps/desktop/$BE_BIN" ./cmd/main.go
-          cd ../../apps/desktop
-
-          # 构建前端二进制
-          wails build
-
-          # 生成 wails_tools.nsh（供 NSIS 安装器使用）
-          mkdir -p build/windows/installer
-          cp installer/wails_tools.nsh build/windows/installer/
+          # 构建前端二进制（-ldflags 注入后端版本号，否则 /api/version 恒为 "dev"）
+          wails build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION"
 
           # 便携版
           FE_BIN=build/bin/Flore.exe
           go run ./cmd/package-tool -edition portable -version "$VERSION" -os windows -arch amd64 -feBin "$FE_BIN" -clean false
 
-          # Windows 安装版
+          # 安装版（NSIS）
+          mkdir -p build/windows/installer
+          cp installer/wails_tools.nsh build/windows/installer/
           choco install nsis -y
           MAKENSIS=""
           for p in "/c/Program Files (x86)/NSIS/makensis.exe" "/c/ProgramData/chocolatey/lib/nsis/tools/makensis.exe"; do

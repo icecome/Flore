@@ -30,7 +30,7 @@ func TestUnzipSafeSkipsUserData(t *testing.T) {
 	}
 
 	// 应被解出的文件
-	for _, f := range []string{"Flore.exe", "florebackend.exe", filepath.Join("webview2", ".keep")} {
+	for _, f := range []string{"Flore.exe", filepath.Join("webview2", ".keep")} {
 		if _, err := os.Stat(filepath.Join(dest, f)); err != nil {
 			t.Errorf("expected %s extracted: %v", f, err)
 		}
@@ -66,7 +66,6 @@ func makeTestZip(t *testing.T, out string) {
 		}
 	}
 	add("Flore.exe", "payload")
-	add("florebackend.exe", "payload")
 	add("webview2/.keep", "")
 	add("data/.keep", "")
 	add("backups/.keep", "")

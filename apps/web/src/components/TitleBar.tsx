@@ -97,7 +97,11 @@ function useWindowState() {
           const state = await app.GetWindowState();
           max = !!state.maximised;
         } catch {}
-      } else if (app.WindowIsMaximised) {
+      }
+      // GetWindowState 缺失或抛错时回退到实时查询。
+      // 必须用独立 if 而非 else if：否则 GetWindowState 存在但启动早期抛错时会
+      // 被前一个分支短路，图标永远停在初始"最大化"（dev 分支曾用两个独立 if）。
+      if (max === undefined && app.WindowIsMaximised) {
         try {
           max = await app.WindowIsMaximised();
         } catch {}

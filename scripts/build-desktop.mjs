@@ -72,7 +72,13 @@ if (runDesktop) {
 
   // 2) wails build（原生当前平台；mac 产 Flore.app，win 产 Flore.exe，linux 产 Flore）
   //    后端代码已编入 Flore 主程序，不再单独构建 florebackend。
-  run(wailsBin(), ['build'], { cwd: desktopDir, env: goEnv });
+  //    必须用 -ldflags 注入后端版本号（appVersion），否则 /api/version 恒为 "dev"；
+  //    wails build 会追加自身 ldflags，此处为增量注入，不冲突。
+  run(
+    wailsBin(),
+    ['build', '-ldflags', `-X github.com/rss/go-server/internal/handlers.appVersion=${version}`],
+    { cwd: desktopDir, env: goEnv }
+  );
 
   // 3) package-tool 打包
   const feBin =
@@ -93,6 +99,7 @@ if (runDesktop) {
     ],
     { cwd: desktopDir, env: goEnv }
   );
+
 }
 
 console.log('[build-desktop] 完成');
