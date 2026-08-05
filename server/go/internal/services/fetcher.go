@@ -571,7 +571,7 @@ func (s *ReaderService) upsertSingleItem(tx *gorm.DB, sourceID int, it FeedItem,
 			updates["author"] = author
 		}
 		if !it.PubDate.IsZero() {
-			updates["pubDate"] = it.PubDate
+			updates["pubDate"] = models.NullableMilliTime{T: &it.PubDate}
 		}
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return 0, false, err
