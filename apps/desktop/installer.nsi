@@ -4,7 +4,7 @@
 ;   makensis -DARG_WAILS_AMD64_BINARY="build\bin\Flore.exe" installer.nsi
 ;
 ; 与 Wails 生成的 project.nsi 的不同：
-;   - 额外包含 florebackend.exe
+;   - 后端已编入主程序（Flore.exe --backend 自衍生），无需独立 florebackend 二进制
 ;   - 使用 User 级安装（无需管理员），装到 %LOCALAPPDATA%\Programs\Flore
 ;   - 快捷方式可选（安装时用户勾选）
 
@@ -53,7 +53,6 @@ Section "Flore 应用程序" SEC_APP
     !insertmacro wails.setShellContext
     SetOutPath $INSTDIR
     !insertmacro wails.files
-    File "build\bin\florebackend.exe"
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
     !insertmacro wails.writeUninstaller

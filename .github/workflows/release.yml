@@ -101,7 +101,7 @@ jobs:
           # 安装版（NSIS）
           mkdir -p build/windows/installer
           cp installer/wails_tools.nsh build/windows/installer/
-          choco install nsis -y
+          choco install nsis -y || (sleep 5 && choco install nsis -y)
           MAKENSIS=""
           for p in "/c/Program Files (x86)/NSIS/makensis.exe" "/c/ProgramData/chocolatey/lib/nsis/tools/makensis.exe"; do
             if [ -f "$p" ]; then MAKENSIS="$p"; break; fi
@@ -131,7 +131,11 @@ jobs:
           go run ./cmd/package-tool -edition portable -version "$VERSION" -os darwin -arch arm64 -feBin "$FE_BIN" -clean false
 
           # 安装版：ad-hoc 签名避免「app 已损坏」提示，再打成 dmg
-          codesign --deep --force --sign - build/bin/Flore.app || true
+          if codesign --deep --force --sign - build/bin/Flore.app; then
+            echo "ad-hoc codesign OK"
+          else
+            echo "::warning::ad-hoc codesign 失败 — macOS 包未签名，Gatekeeper 会拦截（用户右键打开或 xattr -d com.apple.quarantine 放行）"
+          fi
           hdiutil create -volname Flore -srcfolder build/bin/Flore.app -ov -format UDZO "build/flore-setup-darwin-arm64-${VERSION}.dmg"
           rm -rf build/Flore-portable
 
@@ -189,11 +193,12 @@ jobs:
       - name: Generate update manifest
         run: |
           cd apps/desktop
+          go mod download
           go run ./cmd/gen-manifest \
             -version "${{ steps.ver.outputs.version }}" \
             -dir ./build \
             -baseURL https://cdn-dl.icecome.com \
-            -githubRepo icecome/Flore \
+            -githubRepo ${{ github.repository }} \
             -notes "Flore ${{ steps.ver.outputs.tag }}" \
             -platforms windows,darwin \
             -variant setup \
