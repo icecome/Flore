@@ -437,6 +437,7 @@ package.json (version: 0.0.1-20260801)
 - 禁止在前端直接导入 Go 模块（反之亦然）
 - 禁止在代码中硬编码路径、端口、密钥
 - 禁止在 commit 中包含构建产物
+- 禁止在提交消息中添加 `Co-Authored-By: Claude ...` 等 AI 署名 trailer：会让 Claude 被 GitHub 计入贡献者、污染贡献者统计。本地已配 `commit-msg` 钩子自动剥离，但 AI 提交时仍应主动不加任何 AI 署名
 
 ### 12.4 代码审查清单（AI 自审）
 
