@@ -52,3 +52,5 @@ apps/desktop/build/bin/
 !build/windows/installer/project.nsi
 
 # AI assistant workspace (project data, do not commit)
+.workbuddy/
+review_tmp/
