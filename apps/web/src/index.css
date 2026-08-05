@@ -245,6 +245,23 @@
 }
 
 @layer base {
+  /* select：统一去除 WKWebView/Safari 嵌入式立体双箭头按钮，
+     用扁平 SVG ⌄ 箭头替代，与 macOS AppKit 风格一致。
+     :where() 保持优先级 0，不被组件级 Tailwind class 压过。 */
+  :where(select) {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=utf8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' width='10' height='7' fill='none' stroke='%2368707A' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='1.5 1.5 6 6 10.5 1.5'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 10px 7px;
+    padding-right: 2rem;
+  }
+  [data-theme="dark"] :where(select) {
+    background-image: url("data:image/svg+xml;charset=utf8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' width='10' height='7' fill='none' stroke='%23A8ACB4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='1.5 1.5 6 6 10.5 1.5'/%3e%3c/svg%3e");
+  }
+
   input[type="range"] {
     -webkit-appearance: none;
     appearance: none;

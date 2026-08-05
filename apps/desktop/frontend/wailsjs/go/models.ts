@@ -1,5 +1,23 @@
 export namespace main {
 	
+	export class ApiResponse {
+	    status: number;
+	    ctype: string;
+	    headers: Record<string, string>;
+	    body: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ApiResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.ctype = source["ctype"];
+	        this.headers = source["headers"];
+	        this.body = source["body"];
+	    }
+	}
 	export class BackendStatus {
 	    goStarted: boolean;
 	    goBaseURL: string;

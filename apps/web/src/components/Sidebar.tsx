@@ -6,6 +6,7 @@ import ContextMenu, { type ContextMenuItem } from './ContextMenu';
 import SettingsModal from './SettingsModal';
 import SearchBox from './SearchBox';
 import type { AppSettings } from '../utils/settings';
+import { getPlatform } from '../utils/api';
 import SourceAvatar from './SourceAvatar';
 import { useContextMenu } from '../hooks/useContextMenu';
 import {
@@ -24,6 +25,7 @@ import {
   Folder as FolderIcon,
   AlertTriangle,
   FolderOpenIcon,
+  Search,
 } from './icons';
 
 interface Props {
@@ -139,6 +141,17 @@ export default function Sidebar({
   totalCount = 0,
   unreadCountInScope = 0,
 }: Props) {
+  // macOS 端独立标题栏已移除，侧边栏顶到窗口顶部；顶栏搜索按钮与交通灯共用一行
+  const [isMac, setIsMac] = useState(false);
+  const [macLoading, setMacLoading] = useState(true);
+  const [showSearch, setShowSearch] = useState(false);
+  useEffect(() => {
+    getPlatform()
+      .then((p) => setIsMac(p === 'darwin'))
+      .catch(() => setIsMac(false))
+      .finally(() => setMacLoading(false));
+  }, []);
+
   // 根据设置过滤订阅源（当前选中的源始终显示）
   // hideRead 保留"从未抓取过"的源（lastSuccessAt 为空），避免新导入源在抓取前被隐藏
   const visibleSources = useMemo(() => {
@@ -315,17 +328,49 @@ export default function Sidebar({
     return sortFoldersByUnreadDescThenName(rootFolders).map(renderFolderNode);
   };
 
+  // 顶栏（搜索按钮行）为 macOS 专属：与交通灯共用一行，仅 mac 渲染。
+  // 非 mac 永不渲染该行，避免平台未知期出现 28px 空占位行造成布局跳动。
+  // macLoading 仅用于门控非 mac 搜索框的出现时机（加载完成后才显示）。
+  const showMacTop = isMac;
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-border bg-canvas">
-      {/* Search */}
-      <div className="flex flex-col gap-2.5 px-3 pb-2 pt-3">
-        <SearchBox
-          query={searchKeyword}
-          onSearch={(kw) => onSearch?.(kw)}
-          onClear={() => onClearSearch?.()}
-          placeholder="搜索文章..."
-        />
-      </div>
+      {/* macOS 顶栏：与交通灯共用一行，搜索按钮右对齐，不挤占交通灯 */}
+      {showMacTop && (
+        <div className="flex h-[28px] items-center justify-end px-3">
+          {isMac && (
+            <button
+              type="button"
+              onClick={() => setShowSearch((v) => !v)}
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-hover hover:text-primary"
+              title={showSearch ? '收起搜索' : '搜索'}
+              aria-label={showSearch ? '收起搜索' : '搜索'}
+            >
+              <Search size={15} />
+            </button>
+          )}
+        </div>
+      )}
+      {isMac && !macLoading && showSearch && (
+        <div className="px-3 pb-2">
+          <SearchBox
+            query={searchKeyword}
+            onSearch={(kw) => onSearch?.(kw)}
+            onClear={() => onClearSearch?.()}
+            placeholder="搜索文章..."
+            autoFocus
+          />
+        </div>
+      )}
+      {!isMac && !macLoading && (
+        <div className="flex flex-col gap-2.5 px-3 pb-2 pt-3">
+          <SearchBox
+            query={searchKeyword}
+            onSearch={(kw) => onSearch?.(kw)}
+            onClear={() => onClearSearch?.()}
+            placeholder="搜索文章..."
+          />
+        </div>
+      )}
 
       {/* Filters */}
       <nav className="flex flex-col gap-0.5 px-2 pb-1.5">

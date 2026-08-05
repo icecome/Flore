@@ -23,6 +23,15 @@
         <string>true</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
+        <!-- ATS：放行 WKWebView 内全部 http 子资源加载（NSAllowsArbitraryLoadsInWebContent
+             豁免 WebView 对任意 http 的加载，并非仅限本机回环）。用于覆盖 <img> 等非 fetch
+             直连后端的场景（如头像/图片代理）；后端数据 fetch 已改经壳绑定转发，与此无关。
+             该豁免仅作用于本 App 的 WebView，不影响系统其他进程。 -->
+        <key>NSAppTransportSecurity</key>
+        <dict>
+            <key>NSAllowsArbitraryLoadsInWebContent</key>
+            <true/>
+        </dict>
         {{if .Info.FileAssociations}}
         <key>CFBundleDocumentTypes</key>
         <array>

@@ -2,24 +2,27 @@ package handlers
 
 import (
 	"net/http"
-	"strings"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 )
 
 // IsLocalOrigin 判断请求来源是否为可信本地源。
 // 与 CORS AllowOriginFunc 共用同一逻辑，保证"跨域拦截"与"CSRF 校验"口径一致。
-// 仅放行 127.0.0.1/localhost 动态端口与 Wails WebView 源；拒绝任意外网源与 opaque origin。
+// 仅按 hostname 匹配 127.0.0.1/localhost/wails.localhost，忽略 scheme 与端口，
+// 以同时覆盖各平台 WebView 源（Windows/Linux 生产为 http://wails.localhost、
+// macOS 生产为 wails://wails.localhost、dev 模式带端口），并天然拒绝
+// wails.localhost.evil.com 这类子域欺骗与外网源。
 func IsLocalOrigin(origin string) bool {
 	if origin == "" {
 		return true
 	}
-	switch {
-	case strings.HasPrefix(origin, "http://127.0.0.1:"),
-		strings.HasPrefix(origin, "http://localhost:"),
-		strings.HasPrefix(origin, "https://localhost:"),
-		origin == "http://wails.localhost",
-		origin == "https://wails.localhost":
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "wails.localhost":
 		return true
 	}
 	return false

@@ -9,6 +9,7 @@ interface Props {
   onSearch: (keyword: string) => void;
   onClear: () => void;
   placeholder?: string;
+  autoFocus?: boolean;
 }
 
 function createSubmitHandler({
@@ -26,7 +27,7 @@ function createSubmitHandler({
   };
 }
 
-export default function SearchBox({ query, onSearch, onClear, placeholder = '搜索文章...' }: Props) {
+export default function SearchBox({ query, onSearch, onClear, placeholder = '搜索文章...', autoFocus = false }: Props) {
   const [input, setInput] = useState(query);
   const inputRef = useRef<HTMLInputElement>(null);
   const { menuProps, showMenu } = useContextMenu();
@@ -60,6 +61,7 @@ export default function SearchBox({ query, onSearch, onClear, placeholder = '搜
           ref={inputRef}
           type="text"
           value={input}
+          autoFocus={autoFocus}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onContextMenu={(e) => {

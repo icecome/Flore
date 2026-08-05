@@ -89,26 +89,28 @@ function useWindowState() {
     const app = getDesktopApp();
     if (!app) return;
 
-    // 优先使用持久化的窗口状态，避免依赖 Wails runtime 启动期不可靠的查询
-    const initMaximized = async () => {
+    // 轮询检测最大化状态变化（500ms 一次，Wails v2 未向前端直接暴露状态变更事件）
+    const checkState = async () => {
+      let max: boolean | undefined;
       if (app.GetWindowState) {
         try {
           const state = await app.GetWindowState();
-          setMaximized(!!state.maximised);
-          maximizedRef.current = !!state.maximised;
-          return;
+          max = !!state.maximised;
+        } catch {}
+      } else if (app.WindowIsMaximised) {
+        try {
+          max = await app.WindowIsMaximised();
         } catch {}
       }
-      // 回退：WindowIsMaximised 也是 async，取返回值
-      if (app.WindowIsMaximised) {
-        try {
-          const isMax = await app.WindowIsMaximised();
-          setMaximized(!!isMax);
-          maximizedRef.current = !!isMax;
-        } catch {}
+
+      if (max !== undefined && max !== maximizedRef.current) {
+        maximizedRef.current = max;
+        setMaximized(max);
       }
     };
-    initMaximized();
+    checkState();
+    const interval = setInterval(checkState, 500);
+    return () => clearInterval(interval);
   }, []);
 
   const callWindow = useCallback(async (method: string) => {
@@ -118,16 +120,16 @@ function useWindowState() {
       if (method === 'WindowToggleMaximise') {
         await app.WindowToggleMaximise?.();
         const isMax = app.WindowIsMaximised ? await app.WindowIsMaximised() : false;
-        setMaximized(isMax);
         maximizedRef.current = isMax;
+        setMaximized(isMax);
       } else if (method === 'WindowMaximise') {
         await app.WindowMaximise?.();
-        setMaximized(true);
         maximizedRef.current = true;
+        setMaximized(true);
       } else if (method === 'WindowUnmaximise') {
         await app.WindowUnmaximise?.();
-        setMaximized(false);
         maximizedRef.current = false;
+        setMaximized(false);
       } else {
         const fn = app[method as keyof typeof app] as unknown as (() => void | Promise<void>) | undefined;
         await fn?.();
@@ -167,22 +169,22 @@ export default function TitleBar() {
   const { handleDragMouseDown } = useWindowDrag(desktop, maximized, runtime);
 
   if (!desktop) return null;
-
+  // 平台未确定前不渲染，避免桌面端误显示错误样式的标题栏（闪烁）
+  if (platform === '') return null;
   const isMac = platform === 'darwin';
+  // macOS 使用原生风格：移除独立标题栏行，搜索栏顶到窗口顶部并避让交通灯（见 Sidebar）
+  if (isMac) return null;
 
-  // macOS: 原生交通灯在左上角，标题区左移 76px 避开，不渲染自定义按钮
   // Windows/Linux: 左标题 + 右侧三按钮
   return (
     <div
-      className={`flex h-[34px] min-h-[34px] bg-surface border-b border-border-subtle items-center select-none ${
-        isMac ? 'pl-[76px]' : 'pl-3.5 justify-between'
-      }`}
-      data-wails-drag={isMac ? undefined : true}
+      className="flex h-[34px] min-h-[34px] items-center justify-between border-b border-border-subtle bg-elevated pl-3.5 shadow-sm select-none"
+      data-wails-drag={true}
     >
       <div
         className="flex items-center gap-2 flex-1 h-full cursor-default"
         data-wails-drag
-        onMouseDown={isMac ? undefined : handleDragMouseDown}
+        onMouseDown={handleDragMouseDown}
       >
         <span className="text-primary flex items-center opacity-90">
           <RssIcon size={16} />
@@ -192,37 +194,35 @@ export default function TitleBar() {
         </span>
       </div>
 
-      {!isMac && (
-        <div className="flex items-center h-full" data-wails-no-drag>
-          <button
-            className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
-            onClick={() => callWindow('WindowMinimise')}
-            title="最小化"
-            aria-label="最小化窗口"
-            data-wails-no-drag
-          >
-            <MinusIcon size={14} />
-          </button>
-          <button
-            className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
-            onClick={handleMaxRestore}
-            title={maximized ? '还原' : '最大化'}
-            aria-label={maximized ? '还原窗口' : '最大化窗口'}
-            data-wails-no-drag
-          >
-            {maximized ? <CopyIcon size={12} /> : <MaximizeIcon size={12} />}
-          </button>
-          <button
-            className="titlebar-control close w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
-            onClick={() => callWindow('WindowClose')}
-            title="关闭"
-            aria-label="关闭窗口"
-            data-wails-no-drag
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
+      <div className="flex items-center h-full" data-wails-no-drag>
+        <button
+          className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
+          onClick={() => callWindow('WindowMinimise')}
+          title="最小化"
+          aria-label="最小化窗口"
+          data-wails-no-drag
+        >
+          <MinusIcon size={14} />
+        </button>
+        <button
+          className="titlebar-control w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
+          onClick={handleMaxRestore}
+          title={maximized ? '还原' : '最大化'}
+          aria-label={maximized ? '还原窗口' : '最大化窗口'}
+          data-wails-no-drag
+        >
+          {maximized ? <CopyIcon size={12} /> : <MaximizeIcon size={12} />}
+        </button>
+        <button
+          className="titlebar-control close w-[42px] h-full border-0 bg-transparent text-secondary cursor-pointer flex items-center justify-center"
+          onClick={() => callWindow('WindowClose')}
+          title="关闭"
+          aria-label="关闭窗口"
+          data-wails-no-drag
+        >
+          <X size={14} />
+        </button>
+      </div>
     </div>
   );
 }

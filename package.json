@@ -10,9 +10,9 @@
     "dev:router": "cd apps/routing-tool && npm run dev",
     "build:web": "cd apps/web && npm run build",
     "build:router": "cd apps/routing-tool && npm run build",
-    "build:go": "cd server/go && go build -ldflags=\"-X github.com/rss/go-server/internal/handlers.appVersion=%npm_package_version%\" -o ../../apps/desktop/build/bin/florebackend.exe ./cmd/main.go",
-    "build:desktop": "cd apps/desktop && node sync-version.mjs %npm_package_version% && node -e \"const {execFileSync,execSync}=require('child_process');const {join}=require('path');const gp=execSync('go env GOPATH',{encoding:'utf8'}).trim();execFileSync(join(gp,'bin','wails'+(process.platform==='win32'?'.exe':'')),['build'],{stdio:'inherit'})\" && go run ./cmd/package-tool -edition portable -version %npm_package_version% -os windows -arch amd64",
-    "build": "npm run build:web && npm run build:go && npm run build:desktop",
+    "build:go": "node scripts/build-desktop.mjs --steps backend",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "build": "npm run build:web && node scripts/build-desktop.mjs",
     "wails:dev": "cd apps/desktop && node -e \"const {execFileSync,execSync}=require('child_process');const {join}=require('path');const gp=execSync('go env GOPATH',{encoding:'utf8'}).trim();execFileSync(join(gp,'bin','wails'+(process.platform==='win32'?'.exe':'')),['dev'],{stdio:'inherit'})\"",
     "wails:build": "npm run build:desktop"
   },

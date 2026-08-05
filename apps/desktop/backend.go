@@ -19,12 +19,30 @@ func (a *App) startBackends() {
 	dbPath := a.readerDatabasePath()
 	a.logger.Printf("database path: %s", dbPath)
 
-	goExe := a.findGoBackend()
-	a.logger.Printf("found go backend: %s", goExe)
-	if goExe == "" {
-		a.logger.Printf("go backend skipped: executable not found")
+	// 后端默认由主程序自身以 --backend 参数衍生子进程运行（同一份已签名的
+	// Flore 二进制，Gatekeeper 不再拦截）；开发态可用 FLORE_BACKEND_PATH 显式
+	// 指定一个独立后端二进制（绝对路径）覆盖此行为。
+	exePath, err := os.Executable()
+	if err != nil {
+		a.logger.Printf("go backend skipped: cannot resolve own executable: %v", err)
 		return
 	}
+	bePath := exePath
+	beArgs := []string{"--backend"}
+	if env := os.Getenv(backendPathEnv); env != "" {
+		if filepath.IsAbs(env) {
+			if _, statErr := os.Stat(env); statErr == nil {
+				bePath = env
+				beArgs = []string{}
+				a.logger.Printf("using explicit backend binary from %s (FLORE_BACKEND_PATH)", bePath)
+			} else {
+				a.logger.Printf("%s points to a missing file, ignored: %q", backendPathEnv, env)
+			}
+		} else {
+			a.logger.Printf("%s must be an absolute path, ignored: %q", backendPathEnv, env)
+		}
+	}
+	a.logger.Printf("spawning backend: %s %v", bePath, beArgs)
 
 	// 不再探测空闲端口（findFreePort 存在"探测后交给后端绑定"的 TOCTOU 窗口）。
 	// 改为后端自行绑定 PORT=0（系统分配），并通过 FLORE_PORT_FILE 回报实际端口，
@@ -32,7 +50,7 @@ func (a *App) startBackends() {
 	portFile := filepath.Join(os.TempDir(), fmt.Sprintf("flore-port-%d.txt", os.Getpid()))
 	_ = os.Remove(portFile)
 
-	cmd := a.startProcess("go-backend", goExe, []string{}, map[string]string{
+	cmd := a.startProcess("go-backend", bePath, beArgs, map[string]string{
 		"PORT":            "0",
 		"DATABASE_URL":    dbPath,
 		"FLORE_LOG_FILE":  filepath.Join(filepath.Dir(dbPath), "florebackend.log"),
@@ -332,64 +350,6 @@ func (a *App) waitForPortFile(portFile string, exited <-chan struct{}) int {
 	}
 }
 
-// findGoBackend 查找 Go 后端可执行文件。
-// 只信任两个来源（M4）：
-//  1. 环境变量 FLORE_BACKEND_PATH 指定的绝对路径（开发态显式指定）
-//  2. 可执行文件所在目录及其 build/bin 子目录（生产/便携部署）
-//
-// 已彻底移除基于当前工作目录的相对路径候选：CWD 由启动方控制，
-// 攻击者可在任意可写目录放置同名二进制诱导执行（条件性 RCE）。
-func (a *App) findGoBackend() string {
-	ext := ""
-	if runtime.GOOS == "windows" {
-		ext = ".exe"
-	}
-	targetName := "florebackend" + ext
-
-	if env := os.Getenv(backendPathEnv); env != "" {
-		if !filepath.IsAbs(env) {
-			a.logger.Printf("%s must be an absolute path, ignored: %q", backendPathEnv, env)
-		} else if _, err := os.Stat(env); err != nil {
-			a.logger.Printf("%s points to a missing file, ignored: %q", backendPathEnv, env)
-		} else {
-			return env
-		}
-	}
-
-	return a.findBackendByExecutable(targetName)
-}
-
-// findBackendByExecutable 从可执行文件所在目录向上遍历（最多 4 层），查找后端可执行文件。
-// 限制查找深度避免在高层目录意外命中同名不可信文件；.app 包内可执行文件位于
-// Contents/MacOS，而后端 florebackend 是 .app 的同级兄弟目录，需向上爬 4 层
-// （MacOS→Contents→flore.app→外层文件夹）才能命中，故深度取 4 而非 3。
-func (a *App) findBackendByExecutable(targetName string) string {
-	exePath, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	exePath, err = filepath.Abs(exePath)
-	if err != nil {
-		return ""
-	}
-
-	appDir := filepath.Dir(exePath)
-	const maxDepth = 4
-	depth := 0
-	for dir := appDir; dir != "" && dir != filepath.Dir(dir) && depth < maxDepth; dir = filepath.Dir(dir) {
-		for _, c := range []string{
-			filepath.Join(dir, targetName),
-			filepath.Join(dir, "build", "bin", targetName),
-		} {
-			if _, statErr := os.Stat(c); statErr == nil {
-				return c
-			}
-		}
-		depth++
-	}
-	return ""
-}
-
 // appDataDir 返回应用数据目录（data/），存放数据库、日志与窗口状态等本地产物；
 // WebView2 缓存与备份目录由 auxRoot 单独管理，与 data/ 同级，不污染 data/。
 // 解析顺序：
@@ -397,14 +357,19 @@ func (a *App) findBackendByExecutable(targetName string) string {
 //  2. 便携模式：可执行文件同级目录存在 data/ 时，使用 data/（便携版跟随目录走）
 //  3. 回退：用户数据目录（Windows 优先 %LOCALAPPDATA%/Flore，否则 HOME/.flore）
 //
-// 注意：便携判定仅“探测” data/ 是否存在、不会主动创建；若用户删除了该空目录，
-// 应用会静默回退到第 3 项，这是已知的便携性边界，不在本次修复范围内。
+// macOS 特例：.app 包在 translocation/签名下为只读，且包内写数据违反签名/沙盒规范，
+// 故 macOS 不走第 2 项「可执行文件同级 data/」判定（该路径位于 flore.app/Contents/MacOS/，
+// 从网上下载的 .app 会被系统只读挂载，导致 data/ 建不出来、日志降级 /dev/null、
+// 后端日志文件打不开直接退出，表现为“无日志无数据库”）。macOS 直接回退到第 3 项
+// （HOME/.flore，始终可写、位置可预期）。
 func (a *App) appDataDir() string {
 	if env := os.Getenv("FLORE_DATA_DIR"); env != "" {
 		return env
 	}
-	if dir := a.findPortableDataDir(); dir != "" {
-		return dir
+	if runtime.GOOS != "darwin" {
+		if dir := a.findPortableDataDir(); dir != "" {
+			return dir
+		}
 	}
 	return a.userDataDirectory()
 }

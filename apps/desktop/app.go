@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -250,6 +254,95 @@ func (a *App) GetAPIToken() string {
 	return a.apiToken
 }
 
+// ApiResponse 前端经桌面壳代理后端 API 的响应。
+// Headers 透传对前端有意义的响应头（下载文件名 Content-Disposition、分页 Link、
+// 缓存校验 ETag/Last-Modified、Cache-Control 等）；逐跳头与已由 body 重新编码的
+// 长度/编码头（Content-Length/Content-Encoding/...）已剔除，避免前端 Response 头不一致。
+type ApiResponse struct {
+	Status  int               `json:"status"`
+	CType   string            `json:"ctype"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"` // base64 编码的响应体（兼容二进制导出）
+}
+
+// defaultProxyTimeoutMs 代理请求默认超时（与前端 DEFAULT_TIMEOUT_MS 对齐）；
+// 前端会按各接口实际 timeoutMs 透传覆盖，仅在其未传或≤0 时生效。
+const defaultProxyTimeoutMs = 30000
+
+// apiClient 供 ApiRequest 转发使用。单次请求的超时由 context.WithTimeout 按前端
+// 透传的 timeoutMs 控制（兜底 30s），此处不设长超时，避免后端挂起时桌面端卡死。
+var apiClient = &http.Client{}
+
+// ApiRequest 代理前端 API 请求到本地后端。
+// 背景：Wails v2 macOS 生产 webview 使用 wails:// 自定义 scheme，fetch
+// http://127.0.0.1:port 被 WebKit 拦截（报 "Load failed"，预检/请求都到不了后端）。
+// 前端所有数据请求经由此绑定由壳进程原生 HTTP 转发，规避该限制（壳直连后端一直正常）。
+// body 为 base64 编码的请求体（兼容 XML/JSON/FormData/二进制），contentType 透传前端设置。
+// timeoutMs 由前端透传（默认 30s），经 context 控制单次请求超时，避免后端挂起时
+// 桌面端 loading 无限卡死（此前固定 5 分钟超时，已移除）。
+func (a *App) ApiRequest(method, path, body, contentType string, timeoutMs int) (ApiResponse, error) {
+	a.backendMutex.Lock()
+	port := a.goPort
+	a.backendMutex.Unlock()
+	if port == 0 {
+		return ApiResponse{}, fmt.Errorf("backend not ready")
+	}
+	bodyBytes, err := base64.StdEncoding.DecodeString(body)
+	if err != nil {
+		return ApiResponse{}, fmt.Errorf("invalid base64 body: %w", err)
+	}
+	u := fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
+	// 超时优先取前端透传值，≤0 时回退默认；context 超时优先于 apiClient 的任何兜底。
+	to := time.Duration(timeoutMs) * time.Millisecond
+	if to <= 0 {
+		to = defaultProxyTimeoutMs * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), to)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return ApiResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.apiToken)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	} else if len(bodyBytes) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := apiClient.Do(req)
+	if err != nil {
+		return ApiResponse{}, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ApiResponse{}, err
+	}
+	// 透传对前端有意义的响应头；剔除逐跳头与已由 body 重新编码的长度/编码头。
+	skipHeaders := map[string]bool{
+		"Content-Length":    true,
+		"Content-Encoding":  true,
+		"Transfer-Encoding": true,
+		"Connection":        true,
+		"Trailer":           true,
+		"Upgrade":           true,
+	}
+	headers := make(map[string]string, len(resp.Header))
+	for k, vv := range resp.Header {
+		if skipHeaders[k] || len(vv) == 0 {
+			continue
+		}
+		headers[k] = vv[0]
+	}
+	return ApiResponse{
+		Status:  resp.StatusCode,
+		CType:   resp.Header.Get("Content-Type"),
+		Headers: headers,
+		Body:    base64.StdEncoding.EncodeToString(data),
+	}, nil
+}
+
 // GetVersion 返回桌面壳版本号（构建时由 -ldflags 注入），供前端与更新器使用。
 func (a *App) GetVersion() string {
 	return version
@@ -285,6 +378,19 @@ func (a *App) startup(ctx context.Context) {
 
 	// 设置窗口标题，覆盖 Wails 开发模式下的默认标题
 	wailsRuntime.WindowSetTitle(ctx, "Flore")
+
+	// 设置应用主菜单（中文标签），绕过 Wails v2 macOS 端角色菜单的英文硬编码
+	a.setupAppMenu(ctx)
+
+	// A1：诊断性强制居中/显示/取消最小化。若窗口因 macOS 窗口管理器/布局问题被创建到
+	// 屏幕外或最小化，此操作可将其带回用户视野。30min 驻留但无窗口时，可据此确认
+	// 窗口是否实际存在（若用户看到蓝色矩形，说明窗口存在，问题在前端渲染）。
+	wailsRuntime.WindowCenter(ctx)
+	wailsRuntime.WindowUnminimise(ctx)
+	wailsRuntime.WindowShow(ctx)
+	// 记录窗口状态，便于排查"只有 dock 图标"问题
+	isMaximised := wailsRuntime.WindowIsMaximised(ctx)
+	a.logger.Printf("window state: centred/unminimised/shown, isMaximised=%v", isMaximised)
 
 	// 注册 Flore 到 Windows 注册表，使原生 Toast 显示应用名而非 wails.localhost
 	a.registerNotificationApp()
