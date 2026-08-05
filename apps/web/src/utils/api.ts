@@ -3,7 +3,7 @@
 //  - 后端 REST 接口的语义化封装（组件不得自行 fetch）
 // API 地址状态位于 ./apiBase，此处 re-export 保持 `utils/api` 单一入口。
 import { showToast } from './toast';
-import { getApi, setApiBase, setApiToken } from './apiBase';
+import { getApi, getApiBase, setApiBase, setApiToken } from './apiBase';
 import { fetchData, request, requestJson, requestOrServerError, requestVoid } from './fetchData';
 import type { FilterRule, Folder, Item, Source } from '../types';
 
@@ -30,6 +30,8 @@ interface WailsApp {
   WindowUnmaximise?: () => void;
   WindowToggleMaximise?: () => void;
   WindowIsMaximised?: () => Promise<boolean>;
+  /** Wails v2 macOS 专用：查询窗口是否处于全屏模式（独立于最大化） */
+  WindowIsFullscreen?: () => Promise<boolean>;
   GetWindowState?: () => Promise<{ maximised: boolean }>;
   WindowClose?: () => void;
   RefreshWindowSettings?: () => void;
@@ -41,6 +43,8 @@ interface WailsApp {
   CheckForUpdate?: () => Promise<UpdateInfo | null>;
   /** 应用已检查的更新（会触发应用重启） */
   StartUpdate?: () => Promise<void>;
+  /** 返回当前操作系统标识（"windows"、"darwin"、"linux"） */
+  GetPlatform?: () => Promise<string>;
 }
 
 interface WailsRuntime {
@@ -58,6 +62,17 @@ export function getDesktopApp(): WailsApp | undefined {
 
 export function isDesktop(): boolean {
   return !!getWailsApp()?.GetBackendStatus;
+}
+
+/** 获取当前操作系统标识，Web 模式下返回空串 */
+export async function getPlatform(): Promise<string> {
+  const app = getWailsApp();
+  if (!app?.GetPlatform) return '';
+  try {
+    return await app.GetPlatform();
+  } catch {
+    return '';
+  }
 }
 
 /** 尝试通过桌面端 Wails runtime 写入剪贴板 */
@@ -177,9 +192,11 @@ async function applyBackendStatus(): Promise<void> {
     }
   }
   try {
-    const status = await app.GetBackendStatus();
-    // 轮询等待后端启动完成，避免设置为 http://127.0.0.1:0
-    const maxRetries = 20;
+  const status = await app.GetBackendStatus();
+  // 轮询等待后端启动完成，避免设置为 http://127.0.0.1:0。
+    // 后端首次启动含数据库迁移，最长接近 15 秒，故轮询窗口与之对齐（75×200ms≈15s），
+    // 否则前端会过早放弃并回退默认端口，表现为“获取失败”。
+    const maxRetries = 75;
     for (let i = 0; i < maxRetries; i++) {
       if (status.goStarted && status.goBaseURL) {
         setApiBase(status.goBaseURL);
@@ -200,10 +217,13 @@ async function applyBackendStatus(): Promise<void> {
 }
 
 export async function initApiBase(maxWaitMs = 3000): Promise<void> {
-  if (!isDesktop() && !maybeWailsEnv()) return;
+  if (!isDesktop() && !maybeWailsEnv()) {
+    return;
+  }
   const ready = await waitForDesktop(maxWaitMs);
-  if (!ready) return;
-  // 必须等待 API base 设置完成，否则首个请求可能拿到错误的默认地址
+  if (!ready) {
+    return;
+  }
   await applyBackendStatus();
 }
 
@@ -583,9 +603,14 @@ export function getImageProxyBase(): string {
   return `${getApi()}/image-proxy`;
 }
 
-/** 站点图标代理前缀，后端经国内图标服务拉取 favicon，避免直接向第三方泄露订阅域名 */
+/** 站点图标代理前缀（Yandex 服务） */
 export function getFaviconProxyBase(): string {
   return `${getApi()}/favicon-proxy`;
+}
+
+/** 直接抓取头像代理前缀（后端从源站抓 favicon.ico） */
+export function getFaviconDirectBase(): string {
+  return `${getApi()}/favicon-direct`;
 }
 
 /** 原文最小代理地址（网页模式回退） */

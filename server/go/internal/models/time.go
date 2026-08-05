@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,16 +21,19 @@ func parseMilliTime(value interface{}) (time.Time, error) {
 	case []byte:
 		return parseMilliTime(string(v))
 	case string:
-		if ms, err := strconv.ParseInt(v, 10, 64); err == nil {
+		// 兼容空格分隔符格式 "2026-08-04 12:36:44+08:00"（GORM 默认 time.Time 序列化产物），
+		// 统一转为 RFC3339 的 T 分隔符格式再解析。
+		s := strings.Replace(v, " ", "T", 1)
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
 			return time.UnixMilli(ms), nil
 		}
-		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
 			return t, nil
 		}
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
 			return t, nil
 		}
-		return time.Time{}, fmt.Errorf("cannot parse time string %q", v)
+		return time.Time{}, fmt.Errorf("cannot parse time string %q", s)
 	case time.Time:
 		return v, nil
 	default:

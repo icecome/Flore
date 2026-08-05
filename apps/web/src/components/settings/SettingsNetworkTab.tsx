@@ -70,13 +70,18 @@ export default function SettingsNetworkTab({ settings, updateSetting }: Props) {
 
       <Section title="隐私">
         <Row
-          title="加载在线头像"
-          desc="通过后端代理的国内图标服务获取订阅源站点图标。关闭后使用字母头像，不向第三方直接泄露订阅域名。"
+          title="头像来源"
+          desc="选择订阅源头像的获取方式。Yandex 服务快速但依赖第三方；直接抓取从源站获取，更准确但可能较慢。"
           control={
-            <Toggle
-              checked={settings.loadOnlineAvatar}
-              onChange={(v) => updateSetting('loadOnlineAvatar', v)}
-            />
+            <select
+              value={settings.faviconMode ?? 'off'}
+              onChange={(e) => updateSetting('faviconMode', e.target.value as 'off' | 'yandex' | 'direct')}
+              className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-[13px] text-primary outline-none focus:border-primary"
+            >
+              <option value="off">关闭（字母头像）</option>
+              <option value="yandex">Yandex 图标服务</option>
+              <option value="direct">直接抓取（后端代理）</option>
+            </select>
           }
         />
       </Section>

@@ -1,7 +1,10 @@
 import { useRef, useState } from 'react';
 import { UploadIcon } from './icons';
 import Button from './Button';
+import ContextMenu from './ContextMenu';
 import ModalLayout from './ModalLayout';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { buildInputMenu } from '../utils/contextMenu';
 
 interface Props {
   onClose: () => void;
@@ -48,9 +51,11 @@ async function executeImport({
 
 export default function ImportOPMLModal({ onClose, onImport }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [opmlContent, setOpmlContent] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const { menuProps, showMenu } = useContextMenu();
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -69,6 +74,7 @@ export default function ImportOPMLModal({ onClose, onImport }: Props) {
   };
 
   return (
+    <>
     <ModalLayout title="导入 OPML" onClose={onClose} width={520}>
       <form onSubmit={handleSubmit} className="p-5 px-6 pb-6">
         <input
@@ -90,8 +96,17 @@ export default function ImportOPMLModal({ onClose, onImport }: Props) {
         <div className="mb-4">
           <label className="block text-sm font-medium text-secondary mb-1.5">或粘贴 OPML 内容</label>
           <textarea
+            ref={textareaRef}
             value={opmlContent}
             onChange={(e) => setOpmlContent(e.target.value)}
+            onContextMenu={(e) => {
+              const el = textareaRef.current;
+              if (!el) return;
+              showMenu(e, buildInputMenu(
+                { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: opmlContent.length > 0, readOnly: false },
+                { onClear: () => setOpmlContent('') },
+              ));
+            }}
             className="w-full px-3 py-[10px] border border-border rounded-sm text-sm font-mono box-border resize-vertical bg-surface text-primary"
             placeholder="粘贴 OPML XML 内容..."
             rows={10}
@@ -106,5 +121,7 @@ export default function ImportOPMLModal({ onClose, onImport }: Props) {
         </div>
       </form>
     </ModalLayout>
+      {menuProps && <ContextMenu {...menuProps} />}
+    </>
   );
 }

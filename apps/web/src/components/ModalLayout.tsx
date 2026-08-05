@@ -48,7 +48,9 @@ function trapFocus(e: KeyboardEvent, container: HTMLDivElement) {
   (e.shiftKey ? last : first).focus();
 }
 
-function useFocusTrap(onClose: () => void) {
+// useFocusTrap 为弹窗提供焦点陷阱（Tab 循环）与 Esc 关闭，并在卸载时归还焦点。
+// 供 ModalLayout 与 SettingsModal 等自定义弹窗复用。
+export function useFocusTrap(onClose: () => void) {
   const containerRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);

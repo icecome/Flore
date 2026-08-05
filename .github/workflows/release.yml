@@ -1,22 +1,25 @@
-# Release workflow for Flore (W3 自动更新分发).
+# Release workflow for Flore (自动更新分发).
 #
 # 触发：
-#   - 推送 v* 标签（如 v0.1.0-20260802）自动发布
+#   - 推送 v* 标签（如 v0.1.0-20260805）自动发布
 #   - workflow_dispatch 手动填写版本号发布
 #
-# 流程：
-#   1) build（仅 Windows）：
-#      - wails build -> package-tool portable 产出 flore-portable-windows-amd64-<version>.zip
-#      - makensis + package-tool setup 产出 flore-setup-windows-amd64-<version>.exe
-#   2) release 作业：
-#      - R2：上传 Windows 便携包 + update.json
-#      - GitHub Release：Windows 便携包 + 安装 exe + update.json
+# 构建矩阵（双平台 × 安装包+便携包 = 4 个包）：
+#   - windows-latest / amd64：便携 zip + NSIS 安装 exe
+#   - macos-latest   / arm64：便携 zip + hdiutil 安装 dmg
 #
-# 备注：macOS/Linux 暂时注释，待问题解决后再开启。
+# 产物命名：
+#   flore-portable-windows-amd64-<ver>.zip      Windows 便携版
+#   flore-setup-windows-amd64-<ver>.exe         Windows 安装版（NSIS）
+#   flore-portable-darwin-arm64-<ver>.zip       macOS 便携版
+#   flore-setup-darwin-arm64-<ver>.dmg          macOS 安装版（未签名）
 #
-# 命名规范：
-#   flore-portable-windows-amd64-<version>.zip    便携版
-#   flore-setup-windows-amd64-<version>.exe       安装版（NSIS）
+# 发布：
+#   - R2：仅上传两平台安装包（自动更新源）+ update.json（manifest 含 windows,darwin 的 setup）
+#   - GitHub Release：4 个包 + update.json（供手动下载）
+#
+# 注意：macOS 包未做 Apple 开发者签名/公证，下载后首次打开会被 Gatekeeper 拦截，
+#       用户需右键「打开」或 `xattr -d com.apple.quarantine <文件>` 放行。
 #
 # 所需 GitHub Secrets：
 #   R2_ACCOUNT_ID          Cloudflare 账户 ID
@@ -32,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（不含 v 前缀，如 0.1.0-20260802）'
+        description: '版本号（不含 v 前缀，如 0.1.0-20260805）'
         required: true
         type: string
 
@@ -41,22 +44,17 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
-    # TODO: 恢复 macOS/Linux 构建（待问题排查完成后取消注释）
-    # strategy:
-    #   fail-fast: false
-    #   matrix:
-    #     include:
-    #       - os: windows-latest
-    #         goos: windows
-    #         goarch: amd64
-    #       - os: macos-latest
-    #         goos: darwin
-    #         goarch: arm64
-    #       - os: ubuntu-latest
-    #         goos: linux
-    #         goarch: amd64
-    #     runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -70,14 +68,6 @@ jobs:
         with:
           node-version: '22'
 
-      # TODO: macOS/Linux 依赖安装（待恢复构建时取消注释）
-      # - name: Install Linux build deps
-      #   if: matrix.goos == 'linux'
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev
-      #     sudo ln -sf webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc 2>/dev/null || true
-
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
@@ -89,35 +79,28 @@ jobs:
       - name: Install web dependencies
         run: cd apps/web && npm ci
 
-      - name: Build & package
+      # ---- Windows：便携 zip + NSIS 安装 exe ----
+      - name: Build & package (Windows)
+        if: matrix.goos == 'windows'
         shell: bash
         run: |
           VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
           VERSION="${VERSION#v}"
           cd apps/desktop
 
-          # 生成 version.go
-          node -e "require('fs').writeFileSync('version.go','package main\n\nvar version = \"' + '$VERSION' + '\"\n')"
+          # 生成 version.go 并同步 wails.json productVersion
+          node sync-version.mjs "$VERSION"
 
-          # 构建后端二进制
-          BE_BIN="build/bin/florebackend.exe"
-          cd ../../server/go
-          mkdir -p $(dirname "../../apps/desktop/$BE_BIN")
-          go build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION" -o "../../apps/desktop/$BE_BIN" ./cmd/main.go
-          cd ../../apps/desktop
-
-          # 构建前端二进制
-          wails build
-
-          # 生成 wails_tools.nsh（供 NSIS 安装器使用）
-          mkdir -p build/windows/installer
-          cp installer/wails_tools.nsh build/windows/installer/
+          # 构建前端二进制（-ldflags 注入后端版本号，否则 /api/version 恒为 "dev"）
+          wails build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION"
 
           # 便携版
           FE_BIN=build/bin/Flore.exe
           go run ./cmd/package-tool -edition portable -version "$VERSION" -os windows -arch amd64 -feBin "$FE_BIN" -clean false
 
-          # Windows 安装版
+          # 安装版（NSIS）
+          mkdir -p build/windows/installer
+          cp installer/wails_tools.nsh build/windows/installer/
           choco install nsis -y
           MAKENSIS=""
           for p in "/c/Program Files (x86)/NSIS/makensis.exe" "/c/ProgramData/chocolatey/lib/nsis/tools/makensis.exe"; do
@@ -130,13 +113,37 @@ jobs:
           go run ./cmd/package-tool -edition setup -version "$VERSION" -os windows -arch amd64 -setupBin build/bin/Flore-installer.exe
           rm -rf build/Flore-portable
 
+      # ---- macOS：便携 zip + hdiutil 安装 dmg（arm64）----
+      - name: Build & package (macOS)
+        if: matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          cd apps/desktop
+
+          node sync-version.mjs "$VERSION"
+
+          wails build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION"
+
+          # 便携版（Flore.app 打成 zip）
+          FE_BIN=build/bin/Flore.app
+          go run ./cmd/package-tool -edition portable -version "$VERSION" -os darwin -arch arm64 -feBin "$FE_BIN" -clean false
+
+          # 安装版：ad-hoc 签名避免「app 已损坏」提示，再打成 dmg
+          codesign --deep --force --sign - build/bin/Flore.app || true
+          hdiutil create -volname Flore -srcfolder build/bin/Flore.app -ov -format UDZO "build/flore-setup-darwin-arm64-${VERSION}.dmg"
+          rm -rf build/Flore-portable
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flore-windows-amd64
+          name: flore-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: warn
           path: |
-            apps/desktop/build/flore-portable-windows-amd64-*.zip
-            apps/desktop/build/flore-setup-windows-amd64-*.exe
+            apps/desktop/build/flore-portable-${{ matrix.goos }}-${{ matrix.goarch }}-*.zip
+            apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.exe
+            apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.dmg
 
   release:
     needs: build
@@ -188,7 +195,8 @@ jobs:
             -baseURL https://cdn-dl.icecome.com \
             -githubRepo icecome/Flore \
             -notes "Flore ${{ steps.ver.outputs.tag }}" \
-            -platforms windows \
+            -platforms windows,darwin \
+            -variant setup \
             -out ./build/update.json
 
       - name: Upload to Cloudflare R2
@@ -202,6 +210,7 @@ jobs:
           V="${{ steps.ver.outputs.version }}"
           # R2 只上传安装包（自动更新源），不上传便携包
           aws s3 cp "apps/desktop/build/flore-setup-windows-amd64-${V}.exe" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
+          aws s3 cp "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
           aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/update.json"
 
       - name: Publish GitHub Release
@@ -212,5 +221,7 @@ jobs:
           files: |
             apps/desktop/build/flore-portable-windows-amd64-*.zip
             apps/desktop/build/flore-setup-windows-amd64-*.exe
+            apps/desktop/build/flore-portable-darwin-arm64-*.zip
+            apps/desktop/build/flore-setup-darwin-arm64-*.dmg
             apps/desktop/build/update.json
           fail_on_unmatched_files: true

@@ -146,7 +146,7 @@ function App() {
     const ac = new AbortController();
     abortRef.current = ac;
     return () => { ac.abort(); };
-  }, [currentSource, currentFolder]);
+  }, [selectedSourceId, selectedFolderId]);
 
   const {
     items, totalCount, readLaterCount, loadingItems,
@@ -286,9 +286,12 @@ function App() {
     setSelectedItem((prev) => (prev && prev.id === id ? { ...prev, isReadLater: readLater } : prev));
   }, [setItems]);
 
-  // 切换已读（阅读区按钮）；items 从 ref 读取，保证回调引用稳定
+  // 切换已读（阅读区按钮）；items 从 ref 读取，保证回调引用稳定。
+  // 避免渲染期写 ref（React 并发渲染下不纯）：改为 effect 中同步最新值。
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const handleToggleRead = useCallback(async (id: number, read: boolean) => {
     const prevItem = itemsRef.current.find((i) => i.id === id);
@@ -481,9 +484,12 @@ function App() {
     }
   };
 
-  // 查找或创建文件夹（用于自动分组）；folders 从 ref 读取，保持回调引用稳定
+  // 查找或创建文件夹（用于自动分组）；folders 从 ref 读取，保持回调引用稳定。
+  // 避免渲染期写 ref，改为 effect 中同步最新值。
   const foldersRef = useRef(folders);
-  foldersRef.current = folders;
+  useEffect(() => {
+    foldersRef.current = folders;
+  }, [folders]);
 
   const ensureFolder = useCallback(async (name: string): Promise<number> => {
     const existing = foldersRef.current.find((f) => f.name === name);
@@ -953,7 +959,6 @@ function App() {
               onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolderSubmit(); if (e.key === 'Escape') setShowCreateFolder(false); }}
               placeholder="文件夹名称"
               className="w-full px-3 py-2.5 border border-border rounded-sm text-sm bg-surface text-primary outline-none focus:border-primary mb-4"
-              autoFocus
             />
             <div className="flex justify-end gap-3">
               <Button variant="secondary" onClick={() => setShowCreateFolder(false)}>

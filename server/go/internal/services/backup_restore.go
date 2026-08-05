@@ -42,7 +42,8 @@ func (s *ReaderService) restoreFromFile(tmpPath string) error {
 	timestamp := time.Now().Format("20060102-150405")
 	bakPath := fmt.Sprintf("%s.bak.%s", currentPath, timestamp)
 	slog.Info("restore: creating backup via VACUUM INTO", "bakPath", bakPath)
-	if err := s.db.Exec(fmt.Sprintf("VACUUM INTO '%s'", bakPath)).Error; err != nil {
+	// 路径必须转义（escapeSQLitePath），bakPath 来自数据库路径，Windows 路径可含单引号
+	if err := s.db.Exec(fmt.Sprintf("VACUUM INTO '%s'", escapeSQLitePath(bakPath))).Error; err != nil {
 		slog.Warn("restore: VACUUM INTO failed, falling back to close-and-copy", "error", err)
 		if err := s.restoreViaCloseAndCopy(tmpPath, currentPath, bakPath); err != nil {
 			return err

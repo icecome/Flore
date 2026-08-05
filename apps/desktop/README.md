@@ -1,7 +1,7 @@
 # Flore 桌面壳（Wails v2）
 
 Flore RSS 阅读器的 Windows 桌面外壳：内嵌 WebView2 承载 `apps/web` 前端，
-并以子进程方式拉起 `server/go` 后端（`florebackend.exe`）。
+并以子进程方式拉起自身（`Flore --backend`）运行 `server/go` 后端。
 
 - 技术栈：Go 1.26 + Wails v2.13 + energye/systray
 - 目标平台：Windows / macOS / Linux（x64 / arm64）
@@ -40,7 +40,7 @@ npm run build:web
 
 `npm run build:desktop` 会依次：
 
-1. `npm run build:go` 用根 `package.json` 版本号（**唯一版本源**）ldflags 注入后端，产出 `build/bin/florebackend[.exe]`
+1. `wails build` 编译桌面壳，后端代码（`server/go/backend`）已通过 go.mod replace 编入 Flore 主程序，ldflags 注入版本号；不再单独产出 `florebackend` 二进制
 2. `wails build -ldflags "-X desktop.version=..."` 产出前端可执行文件（内部经 `wails.json` 的 `frontend:build` 调用 `build-frontend.mjs` 构建并拷贝前端到 `frontend/dist`）
 3. `go run ./cmd/package-tool` 生成 `build/flore-<os>-<arch>.zip` 与 `build/Flore-portable-<version>.zip`
 
@@ -78,14 +78,14 @@ npm run build:web
 `data/` 下存放 `reader.db`、`floredesktop.log`、`florebackend.log`、`windowstate.json`；
 `webview2/`（WebView2 缓存）与 `backups/`（备份）位于 exe 同级目录，与 `data/` 并列（便携包已预置占位文件）。
 
-### 后端二进制查找
+### 后端进程启动
 
-只信任绝对路径（`app.go: findGoBackend`）：
+桌面壳以自身二进制自衍生后端子进程（`apps/desktop/backend.go: startBackends`）：
 
-1. 环境变量 `FLORE_BACKEND_PATH`（必须是绝对路径，供开发态显式指定）
-2. exe 所在目录及其 `build/bin/` 子目录，向上最多 3 层
+1. 默认：用 `os.Executable()` 以 `Flore --backend` 拉起同一份已签名二进制跑后端（macOS 不再有第二个被 Gatekeeper 拦截的独立二进制）。
+2. 开发态可用环境变量 `FLORE_BACKEND_PATH`（必须是绝对路径）覆盖，显式指定一个独立后端二进制。
 
-**不会**再从当前工作目录解析相对路径 —— 那等价于允许任意可写目录植入同名二进制。
+子进程经 Job Object 绑定到主进程，主进程退出时由内核连带回收，杜绝孤儿后端。
 
 ### 本地 API 鉴权
 
@@ -111,7 +111,7 @@ npm run build:web
 - **单实例锁**：Wails `SingleInstanceLock`（`UniqueId = flore-rss-reader-desktop`）。
   第二个实例会把参数发给已运行实例并自杀，已运行实例负责 `WindowUnminimise + WindowShow`。
 - **Job Object**：后端子进程被加入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job，
-  主进程崩溃或被强杀时由内核连带终止后端，杜绝孤儿 `florebackend.exe` 持有 SQLite WAL。
+  主进程崩溃或被强杀时由内核连带终止后端（`Flore.exe --backend` 子进程），杜绝孤儿后端持有 SQLite WAL。
 - **重启**：`RestartApp` 用 `CREATE_BREAKAWAY_FROM_JOB` 启动新实例并传入旧实例 PID，
   新实例在 `wails.Run` 之前等待旧实例退出（互斥体释放）后再继续。
 

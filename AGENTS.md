@@ -70,7 +70,7 @@ rss/                                   # 项目根目录
 │   └── favicon/                       #   网站图标集
 ├── .trae/                             # IDE 配置（skills 等，不提交）
 ├── .design/                           # 设计预览文件（工具生成，不提交）
-├── .workbuddy/                        # AI 助手工作区（不提交）
+├── .workbuddy/                        # AI 助手工作区
 ├── graphify-out/                      # 代码图谱分析输出（不提交）
 ├── AGENTS.md                          # AI 行为总纲（本文件）
 ├── package.json                       # 项目级 npm 脚本编排

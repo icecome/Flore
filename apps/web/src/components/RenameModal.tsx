@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Button from './Button';
+import ContextMenu from './ContextMenu';
 import ModalLayout from './ModalLayout';
+import { useContextMenu } from '../hooks/useContextMenu';
+import { buildInputMenu } from '../utils/contextMenu';
 
 interface Props {
   title: string;
@@ -12,6 +15,7 @@ interface Props {
 export default function RenameModal({ title, initialValue, onClose, onSubmit }: Props) {
   const [newName, setNewName] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { menuProps, showMenu } = useContextMenu();
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -28,6 +32,7 @@ export default function RenameModal({ title, initialValue, onClose, onSubmit }: 
   };
 
   return (
+    <>
     <ModalLayout title={title} onClose={onClose} width={360}>
       <form onSubmit={handleSubmit} className="pt-5 px-6 pb-6">
         <input
@@ -35,6 +40,14 @@ export default function RenameModal({ title, initialValue, onClose, onSubmit }: 
           type="text"
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
+          onContextMenu={(e) => {
+            const el = inputRef.current;
+            if (!el) return;
+            showMenu(e, buildInputMenu(
+              { hasSelection: el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd, hasValue: newName.length > 0, readOnly: el.readOnly },
+              { onClear: () => setNewName('') },
+            ));
+          }}
           className="w-full px-3 py-2.5 border border-border rounded-sm text-base box-border mb-4 bg-surface text-primary"
         />
         <div className="flex justify-end gap-3">
@@ -43,5 +56,7 @@ export default function RenameModal({ title, initialValue, onClose, onSubmit }: 
         </div>
       </form>
     </ModalLayout>
+      {menuProps && <ContextMenu {...menuProps} />}
+    </>
   );
 }

@@ -8,7 +8,7 @@
 // 版本号由 -version 传入，代码中不硬编码。版本号格式示例：0.1.0-20260802。
 // 版本进文件名，确保文件脱离 Release 后仍可追溯。
 //
-// 便携包仅包含可执行文件（Flore.exe + florebackend.exe），
+// 便携包仅包含前端可执行文件（Flore.exe / Flore.app，后端已编入主程序内），
 // data/ backups/ webview2/ 等目录由软件首次运行时自己创建。
 //
 // 用法：
@@ -39,9 +39,7 @@ func main() {
 	outDir := flag.String("outDir", "build", "输出目录")
 	portableDir := flag.String("portableDir", "build/Flore-portable", "便携目录路径（供 zip 与 NSIS 引用）")
 	appName := flag.String("appName", "Flore", "前端可执行文件名（不含扩展名）")
-	backendName := flag.String("backendName", "florebackend", "后端可执行文件名（不含扩展名）")
 	feBin := flag.String("feBin", "", "前端二进制路径（默认 <binDir>/<appName>[.exe]）；macOS 传 <binDir>/Flore.app")
-	beBin := flag.String("beBin", "", "后端二进制路径（默认 <binDir>/<backendName>[.exe]）")
 	setupBin := flag.String("setupBin", "", "NSIS 安装器路径（-edition setup 时必填）")
 	clean := flag.Bool("clean", true, "构建完成后清理便携目录（仅 portable edition）")
 	flag.Parse()
@@ -52,7 +50,7 @@ func main() {
 
 	switch *edition {
 	case "portable":
-		buildPortable(version, osArg, arch, binDir, outDir, portableDir, appName, backendName, feBin, beBin, clean)
+		buildPortable(version, osArg, arch, binDir, outDir, portableDir, appName, feBin, clean)
 	case "setup":
 		buildSetup(version, osArg, arch, outDir, setupBin)
 	default:
@@ -60,7 +58,7 @@ func main() {
 	}
 }
 
-func buildPortable(version, osArg, arch, binDir, outDir, portableDir, appName, backendName, feBin, beBin *string, clean *bool) {
+func buildPortable(version, osArg, arch, binDir, outDir, portableDir, appName, feBin *string, clean *bool) {
 	// 创建便携目录（持久化，供 NSIS 脚本引用）
 	portablePath := *portableDir
 	if err := os.MkdirAll(portablePath, 0o755); err != nil {
@@ -83,21 +81,10 @@ func buildPortable(version, osArg, arch, binDir, outDir, portableDir, appName, b
 		fatal("拷贝前端二进制失败: %v", err)
 	}
 
-	// 拷贝后端二进制
-	bePath := *beBin
-	if bePath == "" {
-		n := *backendName
-		if *osArg == "windows" {
-			n += ".exe"
-		}
-		bePath = filepath.Join(*binDir, n)
-	}
-	if _, err := os.Stat(bePath); err != nil {
-		fatal("后端二进制未找到: %s（请先 build:go）", bePath)
-	}
-	if err := copyPath(bePath, filepath.Join(portablePath, filepath.Base(bePath))); err != nil {
-		fatal("拷贝后端二进制失败: %v", err)
-	}
+	// 后端代码已编入 Flore 主程序（server/go/backend 包），桌面壳以
+	// 「自身二进制 --backend」自衍生子进程跑后端，分发包不再含独立 florebackend。
+	// 因此这里无需拷贝/签名第二个二进制；Wails 已对 Flore.app 做 ad-hoc 自签名，
+	// 子进程即同一份已放行二进制，Gatekeeper 不再拦截。
 
 	// 便携包仅包含可执行文件，data/ backups/ webview2/ 等目录由软件首次运行时自己创建。
 	// 若 data/ 不存在，appDataDir() 自动回退到 %LOCALAPPDATA%/Flore，不会因缺少目录而崩溃。
@@ -170,8 +157,14 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	if _, err = io.Copy(out, in); err != nil {
+		return err
+	}
+	// 保留源文件权限（含可执行位），否则拷贝后二进制丢失 +x，压缩包解压将无法运行
+	if fi, err := os.Stat(src); err == nil {
+		_ = os.Chmod(dst, fi.Mode().Perm())
+	}
+	return nil
 }
 
 func zipDir(src, dest string) error {
@@ -194,13 +187,24 @@ func zipDir(src, dest string) error {
 		if rel == "." {
 			return nil
 		}
-		if info.IsDir() {
-			_, err := zw.Create(rel + "/")
-			return err
-		}
-		w, err := zw.Create(rel)
+		// 用 FileInfoHeader + SetMode 保留 Unix 权限（含可执行位），
+		// 否则解压后的二进制丢失 +x，macOS 无法启动应用。
+		fh, err := zip.FileInfoHeader(info)
 		if err != nil {
 			return err
+		}
+		fh.Name = rel
+		if info.IsDir() {
+			fh.Name += "/"
+			fh.Method = zip.Store
+		}
+		fh.SetMode(info.Mode())
+		w, err := zw.CreateHeader(fh)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
 		}
 		in, err := os.Open(p)
 		if err != nil {
