@@ -229,15 +229,43 @@ jobs:
           aws s3 cp "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
           aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/update.json"
 
-      - name: Publish GitHub Release
+      # softprops 只负责创建/更新 release 元数据；不传 files，避免其内部
+      # 异步并行上传打乱 listing 顺序（实测 5 个 assets 同秒 created_at）。
+      # 上传由下一步 gh release upload 串行完成，调用顺序即 listing 顺序。
+      - name: Publish GitHub Release (metadata only)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Flore ${{ steps.ver.outputs.tag }}
-          files: |
-            apps/desktop/build/flore-portable-windows-amd64-*.zip
-            apps/desktop/build/flore-setup-windows-amd64-*.exe
-            apps/desktop/build/flore-portable-darwin-arm64-*.zip
-            apps/desktop/build/flore-setup-darwin-arm64-*.dmg
-            apps/desktop/build/update.json
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
+
+      - name: Upload assets in fixed order (mac → Windows → update)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+          # 按平台分组（mac 在前）+ update.json 置底
+          ASSETS=(
+            "apps/desktop/build/flore-portable-darwin-arm64-${V}.zip"
+            "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg"
+            "apps/desktop/build/flore-portable-windows-amd64-${V}.zip"
+            "apps/desktop/build/flore-setup-windows-amd64-${V}.exe"
+            "apps/desktop/build/update.json"
+          )
+          for f in "${ASSETS[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "  skip (not built): $f"
+              continue
+            fi
+            NAME="$(basename "$f")"
+            # 重复发版时先删同名资产，保证顺序固定且不被旧文件污染
+            ASSET_ID=$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name==\"$NAME\") | .id" || true)
+            if [ -n "$ASSET_ID" ]; then
+              echo "  remove existing asset: $NAME (id=$ASSET_ID)"
+              gh release delete-asset "$TAG" "$ASSET_ID" || true
+            fi
+            echo "  upload: $NAME"
+            gh release upload "$TAG" "$f"
+          done
