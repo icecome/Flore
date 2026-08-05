@@ -1,195 +1,69 @@
 # Flore 项目长期记忆
 
-## 安全约定（2026-08-03 审查修复后确立，改安全相关代码前必读）
-
+## 一、安全约定（改安全相关代码前必读）
 ### 认证与 CSRF（handlers/security.go）
-- **CSRF 防护**：后端全局注册 `handlers.CSRFProtection()`（在 CORS 之后）；非 GET/HEAD 请求若带 Origin 必须满足"本地源 + `X-Requested-With: XMLHttpRequest`"，Origin:null 一律拒绝；无 Origin 的非浏览器客户端放行
-- **前端约定**：所有写请求必须经 `fetchData.ts` 的 `withTimeout`（自动注入 X-Requested-With）；禁止绕过它直接 fetch
-- **CORS**：`AllowOriginFunc` 使用 `handlers.IsLocalOrigin`（拒绝 null/外网源）；`AllowHeaders` 含 X-Requested-With
-- **代理端点**：只读透传（image/css/favicon）用 `setProxyCORS` 反射本地源，禁止再写 `ACAO:*`
-- **新增只读接口注意**：经 `<img>/<link>` 消费的接口不得放入 sensitive 组（无 Authorization 头）；代理端点必须用 setProxyCORS
+- 全局注册 `handlers.CSRFProtection()`（CORS 之后）；非 GET/HEAD 请求带 Origin 须"本地源 + X-Requested-With: XMLHttpRequest"，Origin:null 拒，无 Origin 非浏览器客户端放行。
+- 前端所有写请求经 `fetchData.ts` 的 `withTimeout`（自动注入 X-Requested-With），禁止绕过。
+- CORS `AllowOriginFunc` 用 `handlers.IsLocalOrigin`：**按 `url.Hostname()` 匹配** `127.0.0.1`/`localhost`/`wails.localhost`，**忽略 scheme 与端口**（2026-08-05 改，原为 scheme+端口精确匹配）。覆盖各端：Windows/Linux 生产 `http://wails.localhost`、macOS 生产 `wails://wails.localhost`、dev 模式 `http://wails.localhost:34115`；精确匹配天然挡 `wails.localhost.evil.com` 子域欺骗与外网源。
+- **关键坑（2026-08-05 定位）**：Wails v2.13 macOS 生产 webview 的 Origin 是 `wails://wails.localhost`（非 `http://`），旧白名单只认 `http://wails.localhost` 精确值 → 所有 GET 被 403 → 前端"获取失败"。改 hostname 匹配后修复，且对 Win/Linux 无回归。
+- 只读透传代理用 `setProxyCORS` 反射本地源，禁写 `ACAO:*`。
 
 ### 更新器签名（updater/verify.go）
-- **Asset.Signature** = 对文件 SHA256 摘要（32 字节原始字节）的 Ed25519 签名，base64；公钥内嵌 `updatePublicKeyRaw`
-- **私钥**：`C:\Users\libing\flore-update-signing-private.key`（PKCS8 PEM，仓库外）；发布流水线用 `node scripts/sign-update.mjs <update.json> <私钥>` 补签
-- **禁止**：`FLORE_UPDATE_MANIFEST_URL` 已被移除（曾用于劫持 manifest）；manifest 仅从固定 HTTPS 通道拉取
-- 换密钥 = 改 verify.go 常量 + 重新补签所有资产
+- `Asset.Signature` = 文件 SHA256 摘要（32 字节）的 Ed25519 签名 base64；公钥内嵌 `updatePublicKeyRaw`。
+- 私钥：`C:\Users\libing\flore-update-signing-private.key`（仓库外）；发布用 `node scripts/sign-update.mjs <update.json> <私钥>` 补签。
+- `FLORE_UPDATE_MANIFEST_URL` 已移除；manifest 仅走固定 HTTPS。换密钥 = 改常量 + 重签所有资产。
 
-### 端口分配（D-C4 修复）
-- 后端 `PORT=0` 由系统分配端口，绑定后写 `FLORE_PORT_FILE` 指定文件；桌面壳 `waitForPortFile` 轮询读取
-- **禁止**再实现"探测空闲端口再交给后端绑定"的 findFreePort 模式（TOCTOU）
+### 端口分配
+- `PORT=0` 由系统分配，绑定后写 `FLORE_PORT_FILE`；桌面壳 `waitForPortFile` 轮询读。禁止 findFreePort（TOCTOU）。
 
 ### 桌面壳
-- `generateAPIToken` 失败必须 fail-closed（os.Exit(1)），禁止返回空 token
-- `stopBackends` 杀进程失败后必须有二次超时兜底，禁止 `<-exited` 无超时等待
+- `generateAPIToken` 失败须 fail-closed（`os.Exit(1)`），禁返回空 token。
+- `stopBackends` 杀进程失败须有二次超时兜底。
 
-## 备份恢复设计（2026-08-01）
+## 二、数据架构与决策
+- 全量备份 = 配置 + 订阅 OPML + 数据库。恢复粒度：全量 / 仅配置 / 仅 OPML。策略：保留 N 个 + 保留 M 天。
+- 端点：`GET /api/backups/:name/contents`、`POST /api/backups/:name/restore-config`、`POST /api/backups/:name/restore-opml`。
+- 同步策略：不自建同步，改做 Fever API 客户端；本地 SQLite + 完整备份，无云端依赖；多端同步借用户自有 Miniflux/FreshRSS。
 
-**全量备份** = 配置（settings.json）+ 订阅源（subscriptions.opml）+ 数据库（database.db）
+## 三、构建与版本规范
+- **Wails 应用必须用 `wails build`**，禁裸 `go build`（缺 `production` tag 会匹配 `app_default_windows.go` 弹模态 MessageBox 阻塞启动）。手动需 `go build -tags production`。
+- **版本三处同步**：① 根 `package.json` 的 `version`（唯一真源）② `apps/desktop/version.go`（自动生成）③ `apps/desktop/wails.json` 的 `productVersion`（由 `sync-version.mjs` 同步，路径 `../../package.json`）。
+- **ldflags 注入变量须字符串字面量初始化**（禁函数调用初始化器，否则 `-X` 静默失效）。后端注入：`-X github.com/rss/go-server/internal/handlers.appVersion=<ver>`；dev 模式无注入显示 `dev`，可用 `FLORE_VERSION` 覆盖。
+- 前端"关于"页版本只走后端 `/api/version`，不走 Wails `GetVersion()`。
 
-**恢复粒度**：
-- 全量恢复：替换数据库 + 设置 + 订阅
-- 仅恢复配置：仅写入 Settings 表，不影响文章
-- 仅恢复订阅源：仅导入 OPML，不影响数据库和设置
+## 四、macOS 分发（核心：后端自衍生架构）
+**铁律：分发包里只有一个 `Flore.app`，不再有第二个独立 `florebackend` 二进制。主程序以 `--backend` 启动自身子进程跑后端。**
 
-**API 端点**：
-- `GET /api/backups/:name/contents` — 获取备份内容清单
-- `POST /api/backups/:name/restore-config` — 仅恢复配置
-- `POST /api/backups/:name/restore-opml` — 仅恢复订阅源
+- **动机**：曾把 `florebackend` 单独打包（包外或包内 `codesign --deep`），但下载带 `com.apple.quarantine` 的 `.app` 点"仍要打开"只放行主程序，**第二个独立二进制仍被 Gatekeeper 静默拦截** → 后端永不起 → 永久"获取失败"。本机无 quarantine 所以"本机正常"是假象。
+- **实现**：
+  - `server/go/backend/backend.go` 导出 `Start()(*Server,error)` + `Server.Stop()/RunBlocking()`，承载原 `cmd/main.go` 全部 gin/路由/DB/监听/优雅关闭（同模块 `github.com/rss/go-server`，可 import internal）。
+  - `server/go/cmd/main.go` = `backend.Start().RunBlocking()`（独立 Web 版仍可用）。
+  - `apps/desktop/main.go`：`main()` 开头判 `os.Args` 含 `--backend` → `runBackendMode()`（禁启 Wails GUI）。
+  - `apps/desktop/backend.go` 的 `startBackends()` 用 `os.Executable()+["--backend"]` 启自身子进程（保留 `FLORE_BACKEND_PATH` 开发态覆盖）。已删 `findGoBackend`/`findBackendByExecutable`/`maxDepth` 查找逻辑。
+  - `apps/desktop/go.mod`：`require github.com/rss/go-server` + `replace => ../../server/go`；`go mod tidy` 拉齐 gin/gorm/sqlite。主程序 `Flore` 含后端（~23MB）。
+  - `scripts/build-desktop.mjs` 不再单独 `go build florebackend`；`package-tool` 不再拷贝/签名 florebackend，仅收 `Flore.app`。
+- **数据目录**：darwin 跳过包内 `findPortableDataDir()`，直接 `userDataDirectory()` → **`~/.flore`**（始终可写）。改数据路径前必读此条。Windows/Linux 维持原便携判定。
+- **验证**：`Flore --backend` 跑同二进制端口正常、`/health` → `{"status":"ok"}`、迁移完成；GUI 常驻时子进程正常存活。headless 下 `wails.Run` 立即返回→shutdown 杀子进程，看不到后端就绪属预期。
+- **排查"获取失败"**：① `Flore.app/Contents/MacOS/Flore` 应 ~23MB 且 `--backend` 可独立起服务；② `~/".flore"/floredesktop.log` 应有 `spawning backend` 与 `Go backend ready`；③ 前端 `applyBackendStatus` 轮询窗口已对齐后端启动上限（75×200ms≈15s，`apps/web/src/utils/api.ts`）。
+- 首次运行右键"打开"或 `xattr -d com.apple.quarantine Flore.app` 清隔离；单实例锁残留进程会致"只有 dock 图标无窗口"，先 `pkill -f Flore` 再启动。
 
-**备份策略**：保留 N 个 + 保留 M 天，自动清理过期备份
+## 五、路由代理与头像约定
+- 只读透传代理（`/image-proxy`、`/css-proxy`、`/favicon-proxy`、`/favicon-direct`）注册在 `api` 组（非 `sensitive`），因 `<img>/<link>` 无法带 `Authorization`，放 sensitive 会让桌面端图片全部 401。`sensitive` 组只保护破坏性写操作。
+- Favicon 代理仅允 `domain` 路径片段 + regex 校验 hostname，上游 host 由 `FAVICON_SERVICE_BASE` 固定 → 无 SSRF。
+- `faviconMode`：`off`/`yandex`(`/favicon-proxy`)/`direct`(`/favicon-direct`)。头像走后端代理，禁前端直连第三方。
 
-## 项目关键决策
+## 六、功能实现备忘（简述）
+- **Media RSS**：`Item.MediaUrls`（JSON 序列化）`extractMediaUrls()` 支持 media:thumbnail/content/group/img；前端画廊 2 列，单张全宽。
+- **摘要 RSS 图片**：`Item.ThumbnailUrl *string`，`extractThumbnailUrl()` 优先 media:thumbnail 再 img src；摘要模式标题下渲染。
+- **MediaUrls 迁移坑**：GORM `serializer:json` 对 `[]string` 在 SQLite 报 `unsupported data type`；落地用 `[]byte` 手动编解码或 string 存 JSON 规避。
+- **抓取性能**：DNS 缓存 60s TTL；`coordinator.go` 删 `WaitIndexChan()`；连接池 MaxIdleConns 200/PerHost 50/Idle 120s。
+- **导出**：PDF 改原生打印（弃 html2canvas 截图截断）；Markdown 优先 Wails `SaveMarkdownFile` → `showSaveFilePicker` → 静默兜底。
+- **窗口状态图标**：`TitleBar.tsx` 用 `GetWindowState()` 默认 + `WindowIsMaximised()` 优先，toggle 后 `await`。
+- **标题栏 macOS 原生风格（2026-08-05 改）**：mac 端**不再渲染独立标题栏行**（`TitleBar.tsx` 对 `platform==='darwin'` 直接 `return null`）；侧边栏（`Sidebar.tsx`）顶到窗口顶部，用顶部 28px 行与交通灯共用——该行右对齐放**搜索按钮**（仅 mac），点击展开 `SearchBox`（`autoFocus`），再点收起；交通灯由系统在左上角渲染，按钮在右故不挤占。**非 mac 维持原样**：始终显示 `SearchBox`。`Windows/Linux` 另保留带三按钮的独立标题栏（h-[34px]），完全不受影响。
+- **mac 搜索栏实现的坑**：不能给 `aside` 整体加 `pt-[28px]` 后又在顶部插 28px 行（会叠成 56px）；正确做法是顶部仅一行 28px（交通灯区）容纳按钮，正文从下一行开始。`showMacTop = isMac`（**非 `isMac || macLoading`**）：非 mac 永不渲染该行，避免平台未知期 28px 空占位行跳动；`macLoading` 仅门控非 mac 搜索框出现时机，mac 期间不渲染 mac 专属装饰。`getPlatform` 异步期间 mac 内容短暂顶到交通灯，判定后立即补 28px 行，属可接受极小闪烁。
+- **mac 拖拽**：Wails `mac.TitleBarHidden()` 模式下整块 webview 默认可作拖拽区，移除前端标题栏后 mac 窗口仍可拖，Go 端无需改动。
 
-### 同步策略
-- **不自建同步**，改为做 Fever API 客户端
-- Alpha 版显式声明"无多端同步"
-- Beta 阶段实现 Fever API 客户端（11-16 人日）
-
-### 数据主权
-- 本地 SQLite + 完整备份体系
-- 无云端依赖
-- 多端同步通过用户自己的 Miniflux/FreshRSS 服务器实现
-
-## pubDate 类型混用修复（2026-08-02）
-
-**问题**：SQLite 混合类型排序导致新抓取的 integer 格式文章被排到 text 格式文章之后，用户需要滚动才能看到最新文章。
-
-**根因**：历史导入数据的 pubDate 为 ISO 8601 text 格式，新项目代码写入 integer 毫秒时间戳，SQLite DESC 排序将 text 类型始终排在 integer 类型之前。
-
-**修复状态**：
-- 迁移脚本已添加到 `migrations.go`（v2），后续启动会自动迁移
-- 便携版数据库已迁移：`F:/Program Files/Flore-portable/data/reader.db`（1970 条 text → integer）
-- 备份：`reader.db.bak`
-
-**关键文件**：
-- `server/go/internal/database/migrate_pubdate.go`：迁移实现
-- `server/go/internal/database/migrations.go`：注册 v2 迁移
-- 顶部：备份与恢复 → 立即备份、备份管理、刷新
-- 备份管理弹窗：恢复备份、导入备份、导出备份、删除备份
-- 备份列表：每行有下载、全量恢复、仅恢复设置、仅恢复订阅、删除按钮
-- 备份策略：保留数量/天数、自动备份开关和间隔
-## 前端样式清理（2026-08-02）
-- **问题**：侧边栏 `Sidebar.tsx` 中存在 `ThemeToggle` 组件，与设置菜单外观切换重复
-- **修复**：移除 `Sidebar.tsx` 中的 `ThemeToggle` import 和渲染，保留设置菜单中的主题切换
-
-## 托盘组件修复（2026-08-02）
-- **问题**：energye/systray 长时间运行后托盘点击无响应
-- **初步方案**：迁移到 gogpu/systray（避免 LockOSThread 线程竞争）
-- **新问题**：gogpu/systray 使用 HWND_MESSAGE，SetForegroundWindow/TrackPopupMenu 失败
-- **最终方案A**：回退到 energye/systray v1.0.3 + RunWithExternalLoop
-  - `RunWithExternalLoop` 返回 start/end 函数，由调用方控制消息循环
-  - 避免 LockOSThread 与 Wails WebView2 COM 初始化的线程竞争
-  - energye/systray 使用普通窗口（WS_OVERLAPPEDWINDOW），TrackPopupMenu 可正常工作
-- **文件**：`apps/desktop/systray.go` 完全重写，`go.mod` 换回 energye/systray
-- **图标**：`//go:embed build/favicon.ico`；Windows 下 energye/systray 使用 `LoadImageW(IMAGE_ICON)` 加载，**仅支持 ICO 格式，PNG 会导致图标不显示**（此问题在 M8 修复时已修正但未更新 MEMORY）
-
-## 构建规范（重要！2026-08-02）
-- **Wails 应用必须用 `wails build` 构建，禁止裸 `go build`！**
-- 裸 `go build` 缺少 `production` build tag，Wails 匹配 `app_default_windows.go` 错误实现，弹出模态 MessageBox 阻塞启动（表现为：托盘不显示、startup 不触发、WebView2 不启动）
-- 手动构建需加：`go build -tags production`
-- 完整打包走 `build-desktop.ps1`（会依次构建后端、wails build、打便携包）
-
-## 备份相关文件
-- 后端服务：`server/go/internal/services/backup.go`
-- 后端路由：`server/go/internal/handlers/reader.go`（备份相关 handler）
-- 前端组件：`apps/web/src/components/settings/SettingsDataTab.tsx`（2026-08-02 完全重写）
-- 图标：`apps/web/src/components/icons.tsx`（Cog、ArchiveRestore）
-
-## 导出功能修复（2026-08-03）
-
-### PDF 导出被动修复
-- **问题**：`handleExportPDF` 使用 `html2canvas` 截图方式，导致长文章截断、图片异常
-- **根因**：方案错误，截图方式不适合文本文档
-- **修复**：改为浏览器原生打印，直接在新窗口渲染 HTML 内容，保留矢量文本和图片
-- **文件**：`apps/web/src/components/Reader.tsx`
-
-### Markdown 导出调整
-- **问题**：右键"导出为 Markdown"使用 `a.click()` 静默下载，未弹出文件保存对话框
-- **修复**：`downloadItemMarkdown` 改为 async 函数，优先调用 Wails `SaveMarkdownFile`，其次用 `showSaveFilePicker` 弹出系统对话框，最后回退到静默下载
-- **文件**：`apps/web/src/utils/contextMenu.ts`、`apps/web/src/utils/api.ts`
-
-## Media RSS 完整支持（方案B，2026-08-03）
-
-**实现**：从单张缩略图升级为完整 Media RSS 支持，存储多张图片并在前端展示画廊。
-
-**后端改动**：
-- `models.go`：Item 新增 `MediaUrls []string` 字段（JSON 序列化）
-- `fetcher.go`：新增 `extractMediaUrls()` 支持 media:thumbnail、media:content、media:group、img src
-- `upsertSingleItem()`：序列化 mediaUrls 为 JSON 存储
-
-**前端改动**：
-- `types.ts`：Item 接口新增 `mediaUrls: string[] | null`
-- `Reader.tsx`：多张图片展示画廊（2列网格），单张图片保持全宽
-
-**数据库**：`mediaUrls` 列由 GORM AutoMigrate 自动创建，现有文章返回 null，前端兼容显示
-
-## 抓取性能优化（2026-08-02）
-
-**问题**：同一网络/系统下，Flore 每次抓取需 30-60 秒，竞品（Folo、FluentReader）只需几秒。
-
-**三处改动**：
-
-1. **DNS 缓存**（`urlpolicy.go`）：新增 `dnsCache` map + 60s TTL，`lookupHostWithCache()` 封装，`DialContext` 改调缓存版，避免每源重复同步 DNS lookup
-2. **移除索引阻塞**（`coordinator.go`）：`worker()` 删除 `WaitIndexChan()` 调用，FTS5 索引已走异步 channel，worker 无需串行等待
-3. **连接池放大**（`urlpolicy.go`）：`MaxIdleConns` 100→200，`MaxIdleConnsPerHost` 10→50，`IdleConnTimeout` 90s→120s
-
-## 窗口状态图标不一致修复（2026-08-02）
-
-- **问题**：启动时窗口右上角最大化/还原图标与窗口实际状态相反
-- **根因**：Wails runtime 在 `Frameless: true` 模式下启动初期 `WindowIsMaximised()` 返回不稳定值；持久化状态文件与实际启动状态可能不同步
-- **修复**：`useEffect` 改为 async 内部函数，先尝试 `await GetWindowState()`（持久化状态作默认值），再 `await WindowIsMaximised()`（运行时实际状态作优先值）；`WindowToggleMaximise` 后改为 `await` 调用
-- **变更**：`app.go` 新增 `GetWindowState()`；`TitleBar.tsx` 重写 `useEffect`；`api.ts` 更新 `Promise` 类型
-- **状态**：Go build ✓，TypeScript ✓，测试 ✓，前端已重新构建并复制到 `desktop/frontend/dist/`
-
-## 路由鉴权与代理约定（2026-08-02，M-13 修复确立）
-
-- **只读透传代理必须放在非敏感路由组**：`/image-proxy`、`/css-proxy`、`/favicon-proxy` 都注册在 `api` 组（非 `sensitive`）。
-- **根因**：`<img>`/`<link>` 无法携带 `Authorization` 头；而 `sensitive` 组在 `FLORE_API_TOKEN` 非空时要求 Bearer → 桌面端经 `<img>` 加载的图片会 401。把只读代理放敏感组既无解安全收益（它们已有全局速率限制 + 类型白名单 + 尺寸上限），又会让桌面端图片全部失效。
-- **`sensitive` 组的本意**：仅保护破坏性写操作（DB 导入/导出、OPML 导入、源/文件夹/过滤规则删除等）。任何经 `<img>` 消费的只读接口都不应放入。
-- **Favicon 代理安全约束**：`/favicon-proxy?domain=` 只允许 `domain` 作路径片段、regex 校验 hostname 字符，上游 host 由后台 `FAVICON_SERVICE_BASE` 固定（默认 `https://favicon.yandex.net/favicon`）→ 无 SSRF 面。上游失败返回 502，前端 `SourceAvatar` 的 `onError` 回退字母头像。
-- **头像代理多模式**（2026-08-03）：`faviconMode` 设置项：`off`（字母头像）/ `yandex`（Yandex 图标服务 `/favicon-proxy`）/ `direct`（后端从源站直接抓 favicon.ico `/favicon-direct`）。`api.iowen.cn` 已下线；Google 服务被墙不可用。
-- **不要重复造轮子**：头像走后端代理，不前端直接请求第三方。
-
-## 摘要模式 RSS 图片不显示（2026-08-03）
-
-**问题**：某订阅源抓取到的摘要模式 RSS 信息不显示图片，其他 RSS 支持。
-
-**根因**：Go 抓取层用标准 XML 解析 `<description>`/`<content:encoded>`，未提取 Media RSS `<media:thumbnail url="..."/>` 和图片 `<img src>`。
-
-**修复（方案A）**：
-- `server/go/internal/services/fetcher.go`：新增 `extractThumbnailUrl()`（优先 media:thumbnail，其次 img src），在 `parseRSS`/`parseAtom` 中调用，写入 `FeedItem.ThumbnailUrl`
-- `server/go/internal/models/models.go`：`Item` 和 `ItemWithSource` 新增 `ThumbnailUrl *string`
-- `server/go/internal/services/fetcher.go`：`upsertSingleItem` 保存 thumbnailUrl
-- `apps/web/src/types.ts`：`Item` 接口添加 `thumbnailUrl: string | null`
-- `apps/web/src/components/Reader.tsx`：摘要模式标题下方渲染缩略图（maxHeight 400px，失败时隐藏）
-- GORM AutoMigrate 自动新增 thumbnailUrl 列
-
-**验证**：`go build` ✓，`go test` ✓，`tsc --noEmit` ✓
-
-## 版本号注入约定（2026-08-03 确立，踩坑后固化）
-
-- **供 `-ldflags -X` 注入的 Go 字符串变量，必须用字符串字面量初始化**，禁止函数调用初始化器。
-  - 错误：`var appVersion = resolveAppVersion()` → 包 init 覆盖链接器写入值，`-X` 静默失效（`go tool nm` 仍能看到 `.str` 符号，具有极强迷惑性）。
-  - 正确：`var appVersion = "dev"`，兜底逻辑放到运行时函数里判断。
-- **版本共三处，改版本号时必须同步**：
-  1. 根 `package.json` 的 `version`（唯一真源，构建脚本从此读取）
-  2. `apps/desktop/version.go`（由 `build:desktop` 自动生成，供 updater 版本比较）
-  3. `apps/desktop/wails.json` 的 `productVersion`（由 `apps/desktop/sync-version.mjs` 自动同步，影响 exe 文件属性）
-
-  - `sync-version.mjs` 读取根 `package.json` 的路径是 `../../package.json`（`apps/desktop` → `apps` → 项目根），不是 `../package.json`（那会指向 `apps/package.json` 导致 ENOENT）。
-- **前端"关于"页版本只来自后端 HTTP `/api/version`**，不走 Wails `GetVersion()`。排查版本显示问题应优先查后端 ldflags 链路，而非桌面壳。
-- 后端注入命令：`-X github.com/rss/go-server/internal/handlers.appVersion=<version>`；dev 模式（`go run`）无注入会显示 `dev`，可用 `FLORE_VERSION` 环境变量覆盖。
-
-## SQLite 数据库迁移（2026-08-03）
-
-**问题**：`Item.MediaUrls []string` 字段在 SQLite 上 `gorm AutoMigrate` 时报 `unsupported data type: &[]`。
-
-**根因**：GORM 的 `serializer:json` 对 `[]string` 切片类型在 SQLite 上没有反序列化成 `interface{}` 的注册转换，导致类型不匹配。
-
-**修复方案**：
-- **方案 A（推荐）**：改用 `[]byte` 手动编解码，保持 SQLite 不变。
-- **方案 B**：改用 `string` 存 JSON 字符串，读写时手动 `json.Marshal`/`json.Unmarshal`。
-- **方案 C**：迁至 PostgreSQL，其 `jsonb` 原生支持 `[]string`。
-
-**相关文件**：`server/go/internal/models/models.go`（`Item.MediaUrls` 定义）、`server/go/internal/database/migrate.go`（AutoMigrate 调用点）。
+## 七、平台怪癖
+- **Windows 托盘**：`systray.go` 用 energye/systray v1.0.3 + `RunWithExternalLoop`，图标 `//go:embed build/favicon.ico` **仅支持 ICO**，PNG 不显示。
+- macOS App Translocation 会把 `.app` 复制到只读临时路径；数据写包内违反规范且只读失败，故 darwin 走 `~/.flore`。
+- **macOS select 控件风格统一**：`apps/web/src/index.css` `@layer base` 加 `:where(select)` 全局规则（`appearance:none` + 内联 SVG `⌄` 背景图 + `padding-right:2rem` + `background-position: right 0.75rem center`），覆盖项目全部 13 处 `<select>`（`SettingsShared.Select` + 各 Modal/Tab 裸 select），统一呈现扁平箭头、与 macOS AppKit NSPopUpButton 风格一致。`:where()` 优先级恒 0 不被 Tailwind class 压过；亮色 stroke `%2368707A`，暗色 `[data-theme="dark"]` 覆盖为 `%23A8ACB4`。跨 Win/Linux/macOS/Web 同款样式，**不再分多端规则**（用户 17:18 确认接受现状、要求保持单一全局）。
