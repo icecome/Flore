@@ -13,7 +13,7 @@ import (
 // CurrentSchemaVersion 当前数据库 schema 版本。
 // 每次有破坏性变更（列重命名、数据迁移等）时递增。
 // 新增列/表由 AutoMigrate 自动处理，无需递增版本号。
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 5
 
 // Migration 定义一次版本化迁移
 type Migration struct {
@@ -32,6 +32,9 @@ var migrations = []Migration{
 	{Version: 3, Name: "add NextCheckAtUnix to SourceHealth", Migrate: migrateV3NextCheckAtUnix},
 	// v4: 为 Item.pubDate 热排序列补充索引（幂等）
 	{Version: 4, Name: "add pubDate indexes to Item", Migrate: migrateV4Indexes},
+	// v5: 将残留的 text 格式 pubDate 通过 SQLite strftime 统一转为 integer 毫秒时间戳，
+	//     消除 pubDate 列类型混用导致的排序异常（详见 migrate_v5_pubdate_strftime.go）
+	{Version: 5, Name: "convert text pubDate to integer milliseconds", Migrate: migrateV5PubDateInteger},
 }
 
 // getSchemaVersion 从 Setting 表读取当前 schema 版本号。

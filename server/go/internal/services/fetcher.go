@@ -507,13 +507,17 @@ func (s *ReaderService) upsertFeedItems(sourceID int, items []FeedItem) (int, er
 	return len(newItemIDs), nil
 }
 
-// filterValidItems 过滤出有 link 的有效条目
+// filterValidItems 过滤出有 link 的有效条目，并按 link 去重（保留首次出现）。
+// 部分 RSS 源会返回重复条目，不去重会导致 UNIQUE 约束冲突使整个抓取事务回滚。
 func filterValidItems(items []FeedItem) []FeedItem {
+	seen := make(map[string]bool, len(items))
 	validItems := make([]FeedItem, 0, len(items))
 	for _, it := range items {
-		if it.Link != "" {
-			validItems = append(validItems, it)
+		if it.Link == "" || seen[it.Link] {
+			continue
 		}
+		seen[it.Link] = true
+		validItems = append(validItems, it)
 	}
 	return validItems
 }
@@ -571,7 +575,7 @@ func (s *ReaderService) upsertSingleItem(tx *gorm.DB, sourceID int, it FeedItem,
 			updates["author"] = author
 		}
 		if !it.PubDate.IsZero() {
-			updates["pubDate"] = it.PubDate
+			updates["pubDate"] = models.NullableMilliTime{T: &it.PubDate}
 		}
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return 0, false, err

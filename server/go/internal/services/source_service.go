@@ -372,38 +372,27 @@ func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.Null
 }
 
 // adaptiveNextCheckAt 根据新增文章数计算下次检查时间戳（Unix 秒）。
-// 行为类似 Miniflux 的 entry_frequency 调度器：
-//   - 0 条新增：延长到 MAX_INTERVAL（默认 3 天）
-//   - 1-5 条：使用源配置的 interval
-//   - 6+ 条：缩短到 MIN_INTERVAL（默认 20 分钟）
+// 调度周期统一取全局设置 defaultInterval（UI "默认抓取间隔"），所有订阅源按此周期轮询：
+//   - 新增 >5 条：缩短到最小间隔（fetchMinInterval），尽快拉全
+//   - 否则：按全局间隔轮询（不再无新增即推到 3 天）
+// interval 参数保留以兼容调用链，当前调度不再依赖单源 interval。
 func (s *ReaderService) adaptiveNextCheckAt(interval int, newCount int) int64 {
+	globalInterval := s.GetSettingInt("defaultInterval", 120)
+	if globalInterval < 5 {
+		globalInterval = 5
+	}
 	minInterval := s.GetSettingInt("fetchMinInterval", 20)
-	maxInterval := s.GetSettingInt("fetchMaxInterval", 4320) // 默认 3 天（分钟）
 	if minInterval <= 0 {
 		minInterval = 20
 	}
-	if maxInterval <= 0 {
-		maxInterval = 4320
-	}
-	if interval <= 0 {
-		interval = 120 // 默认 2 小时
-	}
 
 	now := time.Now()
-	switch {
-	case newCount == 0:
-		// 无新文章：延长检查间隔
-		nextCheck := now.Add(time.Duration(maxInterval) * time.Minute)
-		return nextCheck.Unix()
-	case newCount <= 5:
-		// 少量新文章：使用源配置的 interval
-		nextCheck := now.Add(time.Duration(interval) * time.Minute)
-		return nextCheck.Unix()
-	default:
-		// 大量新文章：缩短到最小间隔
+	if newCount > 5 {
 		nextCheck := now.Add(time.Duration(minInterval) * time.Minute)
 		return nextCheck.Unix()
 	}
+	nextCheck := now.Add(time.Duration(globalInterval) * time.Minute)
+	return nextCheck.Unix()
 }
 
 // CacheStats 缓存统计

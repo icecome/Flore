@@ -5,8 +5,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/rss/go-server/internal/models"
 )
 
 // Scheduler 最小后台调度器：按订阅源 interval 周期性向 Coordinator 提交抓取任务。
@@ -77,6 +75,9 @@ func (sch *Scheduler) Start() {
 	}
 	sch.running = true
 	sch.ticker = time.NewTicker(sch.interval)
+
+	// 校正历史数据：旧逻辑可能把 nextCheckAtUnix 推到远未来，导致源长期不被调度
+	sch.resetStaleNextCheckAt()
 
 	// 首轮立即执行
 	sch.wg.Add(1)
@@ -175,6 +176,25 @@ func (s *ReaderService) getDueSources() ([]int, error) {
 	return ids, nil
 }
 
+// resetStaleNextCheckAt 校正历史数据：被旧逻辑推到远未来（默认 3 天）的 nextCheckAtUnix
+// 会导致源长期不被调度。启动时（首轮抓取前）将未处于失败退避的源拉回 now，使其立即进入调度。
+func (sch *Scheduler) resetStaleNextCheckAt() {
+	now := time.Now().Unix()
+	res := sch.service.getDb().Exec(`
+		UPDATE SourceHealth
+		SET nextCheckAtUnix = ?
+		WHERE nextRetryAtUnix = 0
+		  AND nextCheckAtUnix > ?
+	`, now, now)
+	if res.Error != nil {
+		slog.Warn("scheduler: failed to reset stale nextCheckAt", "error", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		slog.Info("scheduler: reset stale nextCheckAt for sources", "count", res.RowsAffected)
+	}
+}
+
 // maybeRunBackup 根据设置决定是否触发自动备份
 func (sch *Scheduler) maybeRunBackup() {
 	defer func() {
@@ -267,23 +287,4 @@ func (sch *Scheduler) maybeRunRetention() {
 			slog.Warn("scheduler: auto vacuum after retention failed", "error", err)
 		}
 	}
-}
-
-// filterSourcesToFetch 筛选需要抓取的源
-func filterSourcesToFetch(sources []models.Source) []int {
-	now := time.Now()
-	var toFetch []int
-	for _, src := range sources {
-		if !src.Active || src.Interval <= 0 {
-			continue
-		}
-		if src.LastSuccessAt.T == nil {
-			toFetch = append(toFetch, src.ID)
-			continue
-		}
-		if now.Sub(*src.LastSuccessAt.T) >= time.Duration(src.Interval)*time.Minute {
-			toFetch = append(toFetch, src.ID)
-		}
-	}
-	return toFetch
 }

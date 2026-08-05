@@ -99,7 +99,7 @@ const INTERVAL_OPTIONS: { value: number; label: string }[] = [
 ];
 
 const OPEN_MODE_OPTIONS: { value: AppSettings['openArticleMode']; label: string }[] = [
-  { value: 'rss', label: '摘要模式' },
+  { value: 'rss', label: '原文模式' },
   { value: 'readability', label: '全文模式' },
   { value: 'iframe', label: '网页模式' },
   { value: 'browser', label: '浏览器打开' },
@@ -672,7 +672,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
               />
               <Row
                 title="启动时自动抓取"
-                desc="应用启动后立即执行一次全量抓取。"
+                desc="应用启动后立即执行一次抓取。"
                 control={
                   <Toggle
                     checked={settings.autoFetchOnStart}
