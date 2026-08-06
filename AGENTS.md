@@ -451,6 +451,18 @@ package.json (version: 0.0.1-20260801)
 - [ ] 是否符合命名规范
 - [ ] 构建产物是否被正确忽略
 
+### 12.5 Git 钩子与格式化守卫
+
+项目通过版本化的 `.githooks/` 目录管理 Git 钩子，启用方式（每个 clone 仅需一次）：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+- **pre-push（gofmt 守卫）**：推送前自动对 `server/go`、`apps/desktop` 两个 Go 模块目录运行 `gofmt -l`。若发现未格式化文件，钩子先自动运行 `gofmt -w` 修复，再**阻断本次推送**并提示重新提交，确保远端 CI 的 gofmt 检查不会失败。
+- **使用时机**：任何 `git push` 前都会自动检查；本地写代码时应养成保存后即 `gofmt -w <file>` 的习惯，避免堆积大量格式差异。
+- **与 CI 的关系**：`.github/workflows/` 中的 lint 步骤同样执行 `gofmt -l server/go apps/desktop`，钩子只是把失败提前到本地、节省 CI 往返。
+
 ---
 
 ## 十三、已识别问题

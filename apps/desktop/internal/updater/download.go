@@ -19,13 +19,13 @@ import (
 
 // 下载相关常量
 const (
-	chunkSize           int64         = 4 << 20 // 单分片大小：4MB
-	maxConcurrency      = 4              // 并行分片数
-	chunkRetries        = 3              // 单分片失败重试次数（每轮遍历全部下载源）
-	chunkTimeout        = 60 * time.Second // 单分片请求超时（含连接与读取，防 stall 卡死）
-	overallTimeout      = 30 * time.Minute // 整体超时兜底
-	maxUpdateAssetBytes = 2 << 30            // 2GB 绝对上限（防 zip-bomb）
-	minProgressStep     = 0.02               // 进度回调最小步进，避免过频
+	chunkSize           int64 = 4 << 20          // 单分片大小：4MB
+	maxConcurrency            = 4                // 并行分片数
+	chunkRetries              = 3                // 单分片失败重试次数（每轮遍历全部下载源）
+	chunkTimeout              = 60 * time.Second // 单分片请求超时（含连接与读取，防 stall 卡死）
+	overallTimeout            = 30 * time.Minute // 整体超时兜底
+	maxUpdateAssetBytes       = 2 << 30          // 2GB 绝对上限（防 zip-bomb）
+	minProgressStep           = 0.02             // 进度回调最小步进，避免过频
 )
 
 // errNoRange 表示所有下载源都不支持 HTTP Range，需退化为单流整文件下载。
@@ -180,7 +180,7 @@ func resolveSize(asset *Asset, client *http.Client) (int64, error) {
 			}
 		}
 	}
-	return 0, nil
+	return 0, fmt.Errorf("无法获取文件大小")
 }
 
 // downloadChunk 下载单个分片：先判断已完整则跳过（续传），否则按
@@ -398,7 +398,6 @@ func verifyFile(dest string, asset *Asset) error {
 
 func newHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: chunkTimeout,
 		Transport: &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,

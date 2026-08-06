@@ -1,0 +1,33 @@
+#!/bin/sh
+# pre-push: 推送前强制 Go 代码通过 gofmt 格式化
+#
+# 若发现未格式化文件，自动运行 gofmt -w 修复并阻断本次推送，
+# 提示开发者重新 add/commit 后再推送，避免将未格式化代码推上远端、
+# 触发 CI 的 gofmt 检查失败。
+#
+# 启用方式（每个 clone 一次）：
+#   git config core.hooksPath .githooks
+
+set -e
+
+# 与 CI 检查保持一致：仅扫描这两个 Go 模块目录
+GO_DIRS="server/go apps/desktop"
+
+unformatted=$(gofmt -l $GO_DIRS 2>/dev/null || true)
+
+if [ -n "$unformatted" ]; then
+  echo "Error: 以下 Go 文件未通过 gofmt 格式化，已自动运行 gofmt -w 修复："
+  echo "$unformatted"
+  for f in $unformatted; do
+    gofmt -w "$f"
+  done
+  echo ""
+  echo "已修复，请重新提交后再推送："
+  echo "  git add -A"
+  echo "  git commit --amend --no-edit   # 修正最后一次提交"
+  echo "  git push"
+  exit 1
+fi
+
+echo "pre-push: gofmt 检查通过"
+exit 0
