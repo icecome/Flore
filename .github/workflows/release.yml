@@ -241,14 +241,16 @@ jobs:
           # 支持删除旧标签后重推同名标签：已存在则更新而非报错
           allowUpdates: true
 
-      - name: Upload assets in fixed order (mac → Windows → update)
+      - name: Upload assets (clobber on re-run)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           V="${{ steps.ver.outputs.version }}"
           TAG="${{ steps.ver.outputs.tag }}"
-          # 按平台分组（mac 在前）+ update.json 置底
+          # 本步骤在单一非矩阵 release job 中串行执行，不存在 job 间并发竞争；
+          # 重推标签时 release 已存在、同名资产可能已在，用 --clobber 幂等覆盖
+          # （避免 "asset already exists"），调用顺序即 listing 顺序。
           ASSETS=(
             "apps/desktop/build/flore-portable-darwin-arm64-${V}.zip"
             "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg"
@@ -262,12 +264,6 @@ jobs:
               continue
             fi
             NAME="$(basename "$f")"
-            # 重复发版时先删同名资产，保证顺序固定且不被旧文件污染
-            ASSET_ID=$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name==\"$NAME\") | .id" || true)
-            if [ -n "$ASSET_ID" ]; then
-              echo "  remove existing asset: $NAME (id=$ASSET_ID)"
-              gh release delete-asset "$TAG" "$ASSET_ID" || true
-            fi
-            echo "  upload: $NAME"
-            gh release upload "$TAG" "$f"
+            echo "  upload (clobber): $NAME"
+            gh release upload --clobber "$TAG" "$f"
           done
