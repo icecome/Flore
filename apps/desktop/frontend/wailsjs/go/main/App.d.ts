@@ -11,7 +11,11 @@ export function GetAPIToken():Promise<string>;
 
 export function GetBackendStatus():Promise<main.BackendStatus>;
 
+export function GetCachedUpdate():Promise<updater.UpdateInfo>;
+
 export function GetPlatform():Promise<string>;
+
+export function GetUpdateProgress():Promise<number>;
 
 export function GetVersion():Promise<string>;
 

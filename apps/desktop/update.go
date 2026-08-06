@@ -26,6 +26,14 @@ func (a *App) CheckForUpdate() (*updater.UpdateInfo, error) {
 // 由外部脚本在进程释放后完成文件覆盖并重启。下载进度经回调写入 updateProgress，
 // 供前端 GetUpdateProgress 轮询展示；全部下载源失败时返回错误（由前端提示手动下载）。
 func (a *App) StartUpdate() error {
+	// 防并发：前端 mount 已通过 GetUpdateProgress 同步"正在下载"状态，
+	// 正常路径不应发生重入；CompareAndSwap 把并发点击收敛为可识别错误。
+	if !a.updateInFlight.CompareAndSwap(false, true) {
+		a.logger.Printf("[update] StartUpdate 并发请求被拒绝（已在下载中）")
+		return fmt.Errorf("更新已在进行中，请勿重复点击")
+	}
+	defer a.updateInFlight.Store(false)
+
 	a.updateMu.Lock()
 	info := a.cachedUpdate
 	a.updateMu.Unlock()

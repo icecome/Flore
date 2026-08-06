@@ -18,8 +18,16 @@ export function GetBackendStatus() {
   return window['go']['main']['App']['GetBackendStatus']();
 }
 
+export function GetCachedUpdate() {
+  return window['go']['main']['App']['GetCachedUpdate']();
+}
+
 export function GetPlatform() {
   return window['go']['main']['App']['GetPlatform']();
+}
+
+export function GetUpdateProgress() {
+  return window['go']['main']['App']['GetUpdateProgress']();
 }
 
 export function GetVersion() {

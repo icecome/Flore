@@ -19,7 +19,7 @@ export default function SettingsAboutTab() {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateManualUrl, setUpdateManualUrl] = useState<string | null>(null);
 
-  // 挂载时读取版本号 + 后台缓存更新结果
+  // 挂载时读取版本号 + 后台缓存更新结果 + 后台下载进度
   useEffect(() => {
     let cancelled = false;
 
@@ -31,19 +31,22 @@ export default function SettingsAboutTab() {
         if (!cancelled) setVersion('未知');
       });
 
-    // 桌面端读取后台缓存的更新结果；缓存为空时静默补一次检查（不弹 toast）
+    // 桌面端读取后台缓存的更新结果 + 后台下载进度；
+    // 两者必须并行读，避免"中途关弹窗后重开"看不到"正在下载"状态、再次点击触发并发下载竞态。
     if (desktop) {
       (async () => {
-        const cached = await getCachedUpdate();
+        const [cached, prog] = await Promise.all([
+          getCachedUpdate().catch(() => null),
+          getUpdateProgress().catch(() => 0),
+        ]);
         if (cancelled) return;
-        if (cached) {
-          setUpdate(cached);
-          return;
+        if (cached) setUpdate(cached);
+        // progress 在 (0, 1) 表示下载进行中；(≥1) 表示已下载完成、进程即将重启。
+        // 两种状态都应让"立即更新"按钮禁用，避免重入。
+        if (prog > 0) {
+          setUpdating(true);
+          setProgress(prog >= 1 ? 1 : prog);
         }
-        try {
-          const info = await checkForUpdate();
-          if (!cancelled && info) setUpdate(info);
-        } catch { /* 静默 */ }
       })();
     }
 
@@ -157,10 +160,10 @@ export default function SettingsAboutTab() {
             <p className="text-[13px] text-danger">{updateError}</p>
             <button
               type="button"
-              className="mt-1 text-[13px] text-primary underline-offset-2 hover:underline focus:outline-none"
+              className="mt-1 block w-full break-all text-left text-[13px] text-primary underline-offset-2 hover:underline focus:outline-none"
               onClick={() => openExternal(updateManualUrl)}
             >
-              {updateManualUrl.replace(/^https?:\/\//, '')}
+              {updateManualUrl}
             </button>
           </div>
         )}
@@ -174,10 +177,10 @@ export default function SettingsAboutTab() {
           项目开源地址：
           <button
             type="button"
-            className="ml-1 text-primary underline-offset-2 hover:underline focus:outline-none"
+            className="ml-1 break-all text-primary underline-offset-2 hover:underline focus:outline-none"
             onClick={() => openExternal(REPO_URL)}
           >
-            {REPO_URL.replace(/^https?:\/\//, '')}
+            {REPO_URL}
           </button>
         </p>
       </Section>

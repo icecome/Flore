@@ -62,6 +62,11 @@ type App struct {
 	// updateProgress 当前更新下载进度 0~1（以 uint64 存 float64 位，兼容 Go 1.26），
 	// 原子访问，供前端轮询（GetUpdateProgress）。
 	updateProgress atomic.Uint64
+	// updateInFlight 防止 StartUpdate 并发调用：
+	// 关闭再开设置弹窗后，前端 mount 时会通过 GetUpdateProgress 同步"正在下载"状态，
+	// 正常路径不应发生重入；此处再次点击属于异常路径，直接拒绝以避免两份下载
+	// 抢同一个 temp 文件 / 进程被 Quit 中断，进而触发"下载失败"。
+	updateInFlight atomic.Bool
 
 	// 窗口行为设置缓存。startup 时预置默认值，之后只由后台 goroutine 刷新；
 	// 窗口控制路径（含运行在主 UI 线程的 OnBeforeClose）只读缓存，
