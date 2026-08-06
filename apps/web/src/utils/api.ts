@@ -43,6 +43,10 @@ interface WailsApp {
   CheckForUpdate?: () => Promise<UpdateInfo | null>;
   /** 应用已检查的更新（会触发应用重启） */
   StartUpdate?: () => Promise<void>;
+  /** 读取后台缓存的更新检查结果，无则返回 null */
+  GetCachedUpdate?: () => Promise<UpdateInfo | null>;
+  /** 读取当前更新下载进度（0~1） */
+  GetUpdateProgress?: () => Promise<number>;
   /** 返回当前操作系统标识（"windows"、"darwin"、"linux"） */
   GetPlatform?: () => Promise<string>;
 }
@@ -596,6 +600,20 @@ export async function startUpdate(): Promise<void> {
   const app = getWailsApp();
   if (!app?.StartUpdate) throw new Error('当前环境不支持更新');
   await app.StartUpdate();
+}
+
+/** 读取后台已缓存的更新检查结果（仅桌面端），无则返回 null */
+export async function getCachedUpdate(): Promise<UpdateInfo | null> {
+  const app = getWailsApp();
+  if (!app?.GetCachedUpdate) return null;
+  return app.GetCachedUpdate();
+}
+
+/** 读取当前更新下载进度（0~1），无进行中为 0 */
+export async function getUpdateProgress(): Promise<number> {
+  const app = getWailsApp();
+  if (!app?.GetUpdateProgress) return 0;
+  return app.GetUpdateProgress();
 }
 
 /** 图片代理前缀，供正文图片重写使用 */

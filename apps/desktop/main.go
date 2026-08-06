@@ -33,6 +33,15 @@ const singleInstanceUniqueId = "flore-rss-reader-desktop"
 const restartWaitTimeout = 15 * time.Second
 
 func main() {
+	// 将可靠的构建版本号（version.go，由 sync-version.mjs 从 package.json 注入）
+	// 写入 FLORE_VERSION，供后端 /version 端点读取。
+	// 后端以「自身二进制 --backend」自衍生子进程运行并继承本进程环境变量；
+	// 即便 macOS CI 的 -ldflags 注入 appVersion 不稳定（退化为 "dev"），
+	// server handlers 的 resolveAppVersion 也会用 FLORE_VERSION 兜底，保证 About 页版本号正确。
+	if version != "" {
+		os.Setenv("FLORE_VERSION", version)
+	}
+
 	// 桌面后端自衍生模式：以 --backend 启动自身子进程跑后端，
 	// 这样分发包里不再有“第二个独立可执行文件”——被 Gatekeeper 静默拦截的正是
 	// 这种从网上下载、带 quarantine 的嵌套二进制。子进程即用户已「仍要打开」放行过的

@@ -14,12 +14,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// applyUpdate 在 Windows 上按资产 variant 分支处理更新：
+// applyUpdateProgress 在 Windows 上按资产 variant 分支处理更新：
 //   - setup：下载 NSIS 安装器 → 生成脚本等当前进程退出 → 静默重装到原位（/S /D=安装目录）
 //   - 其它（portable）：下载 zip → 解压 → 生成脚本复制覆盖安装目录
 //
-// 脚本独立于本进程运行，由调用方退出本进程后生效。
-func applyUpdate(asset *Asset, exePath string) error {
+// 脚本独立于本进程运行，由调用方退出本进程后生效。onProgress 报告下载进度（0~1）。
+func applyUpdateProgress(asset *Asset, exePath string, onProgress func(float64)) error {
 	staging, err := os.MkdirTemp("", "flore-update-")
 	if err != nil {
 		return fmt.Errorf("创建临时目录失败: %w", err)
@@ -27,14 +27,14 @@ func applyUpdate(asset *Asset, exePath string) error {
 	// 注意：staging 不能提前删除，bat 需要从中读取下载的资产。
 
 	if asset.Variant == "setup" {
-		return applySetup(asset, exePath, staging)
+		return applySetup(asset, exePath, staging, onProgress)
 	}
-	return applyPortable(asset, exePath, staging)
+	return applyPortable(asset, exePath, staging, onProgress)
 }
 
 // applyPortable 处理便携包更新：下载 zip → 解压 → 脚本复制覆盖安装目录 → 重启。
 // 成功启动 BAT 后由脚本自行清理 staging；任何前置失败都由本函数清理。
-func applyPortable(asset *Asset, exePath, staging string) (retErr error) {
+func applyPortable(asset *Asset, exePath, staging string, onProgress func(float64)) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			_ = os.RemoveAll(staging)
@@ -42,7 +42,7 @@ func applyPortable(asset *Asset, exePath, staging string) (retErr error) {
 	}()
 
 	zipPath := filepath.Join(staging, asset.FileName)
-	if err := DownloadAsset(asset, zipPath); err != nil {
+	if err := DownloadAssetProgress(asset, zipPath, onProgress); err != nil {
 		return fmt.Errorf("下载更新失败: %w", err)
 	}
 
@@ -74,7 +74,7 @@ func applyPortable(asset *Asset, exePath, staging string) (retErr error) {
 
 // applySetup 处理安装包更新：下载 NSIS 安装器 → 脚本等当前进程退出 → 静默重装到原位。
 // 成功启动 BAT 后由脚本自行清理 staging；任何前置失败都由本函数清理。
-func applySetup(asset *Asset, exePath, staging string) (retErr error) {
+func applySetup(asset *Asset, exePath, staging string, onProgress func(float64)) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			_ = os.RemoveAll(staging)
@@ -82,7 +82,7 @@ func applySetup(asset *Asset, exePath, staging string) (retErr error) {
 	}()
 
 	setupPath := filepath.Join(staging, asset.FileName)
-	if err := DownloadAsset(asset, setupPath); err != nil {
+	if err := DownloadAssetProgress(asset, setupPath, onProgress); err != nil {
 		return fmt.Errorf("下载更新失败: %w", err)
 	}
 

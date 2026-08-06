@@ -45,7 +45,8 @@ func CheckForUpdate(currentVersion string) (*UpdateInfo, error) {
 
 // ApplyUpdate 下载并准备应用更新：下载→解压→生成外部脚本→启动脚本后由调用方退出进程。
 // 真正的文件替换由外部脚本在进程退出后完成（避免替换正在运行的自身可执行文件）。
-func ApplyUpdate(info *UpdateInfo) error {
+// onProgress 报告下载进度（0~1），可为 nil。
+func ApplyUpdate(info *UpdateInfo, onProgress func(float64)) error {
 	asset := &Asset{
 		FileName: info.FileName,
 		Size:     info.Size,
@@ -56,5 +57,5 @@ func ApplyUpdate(info *UpdateInfo) error {
 	if err != nil {
 		return fmt.Errorf("无法定位当前可执行文件: %w", err)
 	}
-	return applyUpdate(asset, exePath)
+	return applyUpdateProgress(asset, exePath, onProgress)
 }

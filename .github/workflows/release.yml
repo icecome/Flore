@@ -197,7 +197,7 @@ jobs:
           go run ./cmd/gen-manifest \
             -version "${{ steps.ver.outputs.version }}" \
             -dir ./build \
-            -baseURL https://cdn-dl.icecome.com \
+            -baseURL https://cdn-dl.icecome.com/flore \
             -githubRepo ${{ github.repository }} \
             -notes "Flore ${{ steps.ver.outputs.tag }}" \
             -platforms windows,darwin \
@@ -225,9 +225,9 @@ jobs:
         run: |
           V="${{ steps.ver.outputs.version }}"
           # R2 只上传安装包（自动更新源），不上传便携包
-          aws s3 cp "apps/desktop/build/flore-setup-windows-amd64-${V}.exe" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
-          aws s3 cp "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg" "s3://${{ secrets.R2_BUCKET_NAME }}/v$V/"
-          aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/update.json"
+          aws s3 cp "apps/desktop/build/flore-setup-windows-amd64-${V}.exe" "s3://${{ secrets.R2_BUCKET_NAME }}/flore/v$V/"
+          aws s3 cp "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg" "s3://${{ secrets.R2_BUCKET_NAME }}/flore/v$V/"
+          aws s3 cp "apps/desktop/build/update.json" "s3://${{ secrets.R2_BUCKET_NAME }}/flore/update.json"
 
       # softprops 只负责创建/更新 release 元数据；不传 files，避免其内部
       # 异步并行上传打乱 listing 顺序（实测 5 个 assets 同秒 created_at）。
@@ -238,6 +238,8 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Flore ${{ steps.ver.outputs.tag }}
           fail_on_unmatched_files: false
+          # 支持删除旧标签后重推同名标签：已存在则更新而非报错
+          allowUpdates: true
 
       - name: Upload assets in fixed order (mac → Windows → update)
         env:

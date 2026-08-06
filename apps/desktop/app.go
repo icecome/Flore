@@ -59,6 +59,9 @@ type App struct {
 	// updateMu 保护 cachedUpdate，避免并发检查/应用更新竞态。
 	updateMu     sync.Mutex
 	cachedUpdate *updater.UpdateInfo
+	// updateProgress 当前更新下载进度 0~1（以 uint64 存 float64 位，兼容 Go 1.26），
+	// 原子访问，供前端轮询（GetUpdateProgress）。
+	updateProgress atomic.Uint64
 
 	// 窗口行为设置缓存。startup 时预置默认值，之后只由后台 goroutine 刷新；
 	// 窗口控制路径（含运行在主 UI 线程的 OnBeforeClose）只读缓存，
@@ -400,6 +403,10 @@ func (a *App) startup(ctx context.Context) {
 
 	// 异步启动本地后端服务，避免阻塞 UI（健康检查最长 15s）
 	go a.startBackends()
+
+	// 后台静默检查更新并缓存结果，使设置面板无需手动点击即可展示可用更新
+	// （解决“关闭设置后更新状态丢失”的问题）。
+	go a.backgroundCheckUpdate()
 
 	// 若刚完成自动更新，提示用户
 	if v := a.consumeUpdateMarker(); v != "" {

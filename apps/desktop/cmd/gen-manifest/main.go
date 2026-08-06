@@ -13,7 +13,7 @@
 //	go run ./cmd/gen-manifest \
 //	  -version 0.1.0-20260803 \
 //	  -dir ./dist \
-//	  -baseURL https://cdn-dl.icecome.com \
+//	  -baseURL https://cdn-dl.icecome.com/flore \
 //	  -githubRepo icecome/Flore \
 //	  -notes "修复若干已知问题" \
 //	  -platforms windows \
@@ -62,7 +62,7 @@ type manifest struct {
 func main() {
 	version := flag.String("version", "", "发布版本号（必填，如 0.1.0-20260803）")
 	dir := flag.String("dir", "dist", "构建产物目录，内含各平台分发包")
-	baseURL := flag.String("baseURL", "https://cdn-dl.icecome.com", "R2/CDN 基础地址（manifest 主 URL 前缀）")
+	baseURL := flag.String("baseURL", "https://cdn-dl.icecome.com/flore", "R2/CDN 基础地址（manifest 主 URL 前缀）")
 	githubRepo := flag.String("githubRepo", "", "GitHub 仓库 owner/name，用于生成 Release 兜底 URL（可选）")
 	notes := flag.String("notes", "", "更新说明（Markdown 文本）")
 	minSupported := flag.String("minSupported", "", "最低支持版本，低于此版本强制更新（可选）")

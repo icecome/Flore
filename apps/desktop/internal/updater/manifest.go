@@ -10,7 +10,7 @@ import (
 )
 
 // defaultManifestURL 是 manifest 主拉取地址（Cloudflare R2 自定义域，国内可达）。
-const defaultManifestURL = "https://cdn-dl.icecome.com/update.json"
+const defaultManifestURL = "https://cdn-dl.icecome.com/flore/update.json"
 
 // fallbackManifestURL 为兜底地址：当主通道（R2 自定义域）不可达时，
 // 从 GitHub Release 拉取 update.json（由 release.yml 作为 Release 资产发布）。
