@@ -255,6 +255,10 @@ export default function Reader({
     setProgress(0);
     setReadabilityContent(null);
     setReadabilityTitle('');
+    // 切换文章时清掉上篇文章的网页模式残留，避免 iframe 绑定旧 URL
+    setIframeSrc('');
+    setIframeUsesProxy(false);
+    setLoadingIframe(false);
 
     if (!item) return;
     if (settings.openArticleMode === 'readability') {
