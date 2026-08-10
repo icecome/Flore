@@ -4,6 +4,7 @@
 //
 //	portable: flore-portable-<os>-<arch>-<version>.zip
 //	setup:    flore-setup-<os>-<arch>-<version>.exe
+//	deb:      flore_<version>-1_<arch>.deb
 //
 // 版本号由 -version 传入，代码中不硬编码。版本号格式示例：0.1.0-20260802。
 // 版本进文件名，确保文件脱离 Release 后仍可追溯。
@@ -18,6 +19,9 @@
 //
 //	# 构建安装版（需先构建 NSIS 安装器）
 //	package-tool -edition setup -setupBin build/Flore-installer.exe -version 0.1.0-20260802 -os windows -arch amd64
+//
+//	# 构建 deb 包（Linux）
+//	package-tool -edition deb -version 0.1.0-20260802 -os linux -arch amd64 -feBin build/bin/Flore
 package main
 
 import (
@@ -26,8 +30,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 func main() {
@@ -53,8 +59,10 @@ func main() {
 		buildPortable(version, osArg, arch, binDir, outDir, portableDir, appName, feBin, clean)
 	case "setup":
 		buildSetup(version, osArg, arch, outDir, setupBin)
+	case "deb":
+		buildDeb(version, osArg, arch, binDir, outDir, appName, feBin)
 	default:
-		fatal("不支持的 edition: %s（仅支持 portable|setup）", *edition)
+		fatal("不支持的 edition: %s（仅支持 portable|setup|deb）", *edition)
 	}
 }
 
@@ -121,6 +129,121 @@ func buildSetup(version, osArg, arch, outDir, setupBin *string) {
 		fatal("拷贝安装器失败: %v", err)
 	}
 	fmt.Printf("安装包已生成: %s\n", exePath)
+}
+
+// buildDeb 使用 dpkg-deb 构建 Linux deb 包。
+// 依赖 dpkg-deb 命令（Linux 开发环境自带）。
+func buildDeb(version, osArg, arch, binDir, outDir, appName, feBin *string) {
+	if *osArg != "linux" {
+		fatal("-edition deb 仅支持 linux")
+	}
+	if *feBin == "" {
+		fePath := filepath.Join(*binDir, *appName)
+		if _, err := os.Stat(fePath); err != nil {
+			fatal("feBin 未提供且未找到默认二进制: %s", fePath)
+		}
+		*feBin = fePath
+	}
+	if _, err := os.Stat(*feBin); err != nil {
+		fatal("前端二进制未找到: %s（请先 wails build）", *feBin)
+	}
+
+	// 校验 dpkg-deb 可用
+	if out, err := exec.Command("dpkg-deb", "--version").CombinedOutput(); err != nil {
+		fatal("dpkg-deb 不可用，请安装 dpkg-dev: %v\n%s", err, out)
+	}
+
+	debianDir := filepath.Join(*outDir, "debian-pkg")
+	if err := os.MkdirAll(debianDir, 0o755); err != nil {
+		fatal("创建临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(debianDir)
+
+	// 目录结构
+	usrDir := filepath.Join(debianDir, "usr", "share", *appName)
+	binDirPkg := filepath.Join(debianDir, "usr", "bin")
+	if err := os.MkdirAll(usrDir, 0o755); err != nil {
+		fatal("创建目录失败: %v", err)
+	}
+	if err := os.MkdirAll(binDirPkg, 0o755); err != nil {
+		fatal("创建目录失败: %v", err)
+	}
+
+	// 拷贝主程序
+	if err := copyPath(*feBin, filepath.Join(usrDir, *appName)); err != nil {
+		fatal("拷贝主程序失败: %v", err)
+	}
+	// 创建 bin 符号链接
+	linkPath := filepath.Join(binDirPkg, *appName)
+	if err := os.Remove(linkPath); err != nil && !os.IsNotExist(err) {
+		fatal("清理旧符号链接失败: %v", err)
+	}
+	if err := os.Symlink(filepath.Join("..", "share", *appName, *appName), linkPath); err != nil {
+		fatal("创建符号链接失败: %v", err)
+	}
+
+	// 拷贝图标到标准 icon 目录
+	// 图标源在 binDir 父目录（build/favicon.png），而非 build/bin/
+	iconParentDir := filepath.Dir(*binDir)
+	iconDir := filepath.Join(debianDir, "usr", "share", "icons", "hicolor")
+	for _, size := range []string{"48", "256"} {
+		var iconSrc string
+		candidates := []string{"favicon.png", "appicon.png"}
+		for _, name := range candidates {
+			candidate := filepath.Join(iconParentDir, name)
+			if _, err := os.Stat(candidate); err == nil {
+				iconSrc = candidate
+				break
+			}
+		}
+		if iconSrc == "" {
+			fmt.Fprintf(os.Stderr, "package-tool: 警告，未找到图标源文件\n")
+			continue
+		}
+		iconDst := filepath.Join(iconDir, size+"x"+size, "apps", *appName+".png")
+		if err := os.MkdirAll(filepath.Dir(iconDst), 0o755); err != nil {
+			fatal("创建图标目录失败: %v", err)
+		}
+		if err := copyFile(iconSrc, iconDst); err != nil {
+			fatal("拷贝图标失败: %v", err)
+		}
+	}
+
+	// 创建 .desktop 菜单项
+	desktopPath := filepath.Join(debianDir, "usr", "share", "applications", *appName+".desktop")
+	if err := os.MkdirAll(filepath.Dir(desktopPath), 0o755); err != nil {
+		fatal("创建目录失败: %v", err)
+	}
+	desktopContent := fmt.Sprintf(
+		"[Desktop Entry]\nName=%s\nComment=%s RSS Reader\nExec=%s\nIcon=%s\nTerminal=false\nType=Application\nCategories=Network;Reader;\nStartupNotify=true\n",
+		*appName, *appName, *appName, *appName,
+	)
+	if err := os.WriteFile(desktopPath, []byte(desktopContent), 0o644); err != nil {
+		fatal("写入 .desktop 文件失败: %v", err)
+	}
+
+	// 创建 debian/control（dpkg-deb 要求 DEBIAN/ 目录全大写）
+	controlDir := filepath.Join(debianDir, "DEBIAN")
+	if err := os.MkdirAll(controlDir, 0o755); err != nil {
+		fatal("创建目录失败: %v", err)
+	}
+	debVer := strings.ReplaceAll(*version, "-", ".")
+	controlContent := fmt.Sprintf(
+		"Package: %s\nVersion: %s-1\nSection: utils\nPriority: optional\nArchitecture: %s\nMaintainer: Lice <werrice@outlook.com>\nDescription: %s RSS Reader\n",
+		*appName, debVer, *arch, *appName,
+	)
+	if err := os.WriteFile(filepath.Join(controlDir, "control"), []byte(controlContent), 0o644); err != nil {
+		fatal("写入 control 失败: %v", err)
+	}
+
+	// 构建 deb
+	outName := fmt.Sprintf("%s_%s-1_%s.deb", *appName, debVer, *arch)
+	outPath := filepath.Join(*outDir, outName)
+	cmd := exec.Command("dpkg-deb", "--build", debianDir, outPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fatal("dpkg-deb 构建失败: %v\n%s", err, out)
+	}
+	fmt.Printf("deb 包已生成: %s\n", outPath)
 }
 
 func copyPath(src, dst string) error {
