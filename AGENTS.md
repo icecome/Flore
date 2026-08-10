@@ -59,6 +59,7 @@ rss/                                   # 项目根目录
 │       │   ├── services/              #   业务逻辑层
 │       │   ├── models/                #   数据模型
 │       │   └── database/              #   数据库连接和迁移
+│       ├── pkg/                       #   跨模块共享包（如 paths/）
 │       ├── go.mod / go.sum
 │       └── bin/                       #   编译产物（不提交）
 ├── docs/                              # 项目文档中心
@@ -89,6 +90,7 @@ rss/                                   # 项目根目录
 | `server/go/internal/services/` | 业务逻辑层 | 核心业务实现 | HTTP 类型依赖（gin.Context） |
 | `server/go/internal/models/` | 数据模型 | GORM 模型定义、自定义类型 | 业务逻辑 |
 | `server/go/internal/database/` | 数据库层 | 连接池、迁移 | 业务逻辑 |
+| `server/go/pkg/` | 跨模块共享包 | 无业务依赖的叶子包（如 `paths/`） | 业务逻辑、HTTP 依赖 |
 | `docs/architecture/` | 架构文档 | 系统架构、数据流说明 | 代码文件 |
 | `docs/design/` | 设计文档 | 品牌、UI 规范、配色方案 | 功能规划文档 |
 | `docs/planning/` | 规划文档 | 功能需求、迭代计划 | 架构设计文档 |
@@ -170,7 +172,7 @@ rss/                                   # 项目根目录
 
 ### 5.1 Go 代码规范
 
-**导入分组**（标准库 → 第三方库 → 内部库，组间空行）：
+**导入分组**（标准库 → 第三方库 → 内部库/共享包，组间空行）：
 ```go
 import (
     "fmt"
@@ -180,6 +182,7 @@ import (
     "gorm.io/gorm"
 
     "github.com/rss/go-server/internal/models"
+    "github.com/rss/go-server/pkg/paths"
 )
 ```
 
@@ -264,6 +267,7 @@ import (
 | Go 后端过滤规则 | `server/go/internal/services/filter.go` |
 | Go 后端全文提取 | `server/go/internal/services/readability.go` |
 | Go 后端导入/导出 | `server/go/internal/services/backup.go` / `export.go` |
+| Go 共享工具包 | `server/go/pkg/paths/paths.go`（跨平台路径统一） |
 
 ### 6.2 前端
 
@@ -274,6 +278,7 @@ import (
 | 前端文章列表 | `apps/web/src/components/ArticleList.tsx` |
 | 前端阅读器 | `apps/web/src/components/Reader.tsx` |
 | 前端设置面板 | `apps/web/src/components/SettingsModal.tsx` |
+| 前端平台判断 | `apps/web/src/hooks/usePlatform.ts`（统一 hook，取代各组件内 platform state） |
 | 前端 API 层 | `apps/web/src/utils/api.ts` |
 | 前端类型定义 | `apps/web/src/types.ts` |
 | 前端工具函数 | `apps/web/src/lib/cn.ts` |
@@ -419,6 +424,7 @@ package.json (version: 0.0.1-20260801)
 - **新增后端服务**：放入 `server/go/internal/services/`
 - **新增后端 handler**：放入 `server/go/internal/handlers/`
 - **新增数据模型**：放入 `server/go/internal/models/`
+- **新增跨模块共享包**：放入 `server/go/pkg/`（无业务依赖的叶子包，如 `paths/`）
 - **新增文档**：根据类型放入 `docs/architecture/`、`docs/design/`、`docs/planning/`、`docs/standards/`
 - **新增资源**：放入 `assets/` 对应子目录
 - **新增脚本**：放入 `scripts/`
@@ -498,6 +504,7 @@ graphify 工具报告 `apps/routing-tool/src/scrapers/` 存在文件级导入循
 新增服务  → server/go/internal/services/
 新增 handler → server/go/internal/handlers/
 新增模型  → server/go/internal/models/
+新增跨模块共享包 → server/go/pkg/（如 paths/，无业务依赖）
 新增文档  → docs/{architecture,design,planning,standards}/
 新增资源  → assets/
 新增脚本  → scripts/

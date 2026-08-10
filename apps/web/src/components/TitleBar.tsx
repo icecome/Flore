@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { isDesktop, getDesktopApp, getPlatform } from '../utils/api.js';
+import { isDesktop, getDesktopApp } from '../utils/api.js';
+import { usePlatform } from '../hooks/usePlatform';
 import { showToast } from '../utils/toast';
 import { RssIcon, MinusIcon, MaximizeIcon, CopyIcon, X } from './icons';
 
@@ -161,11 +162,10 @@ function useWindowState() {
 
 export default function TitleBar() {
   const [desktop, setDesktop] = useState(() => isDesktop());
-  const [platform, setPlatform] = useState('');
+  const { platform, isMac, ready } = usePlatform();
 
   useEffect(() => {
     setDesktop(isDesktop());
-    getPlatform().then(setPlatform).catch(() => setPlatform(''));
   }, []);
 
   const runtime = useRuntime();
@@ -174,8 +174,7 @@ export default function TitleBar() {
 
   if (!desktop) return null;
   // 平台未确定前不渲染，避免桌面端误显示错误样式的标题栏（闪烁）
-  if (platform === '') return null;
-  const isMac = platform === 'darwin';
+  if (!ready) return null;
   // macOS 使用原生风格：移除独立标题栏行，搜索栏顶到窗口顶部并避让交通灯（见 Sidebar）
   if (isMac) return null;
 

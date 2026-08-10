@@ -54,6 +54,9 @@ jobs:
           - os: macos-latest
             goos: darwin
             goarch: arm64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -139,6 +142,32 @@ jobs:
           hdiutil create -volname Flore -srcfolder build/bin/Flore.app -ov -format UDZO "build/flore-setup-darwin-arm64-${VERSION}.dmg"
           rm -rf build/Flore-portable
 
+      # ---- Linux 构建依赖 ----
+      - name: Install Linux build deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libgoocanvas-2.0-dev dpkg-dev
+          sudo ln -sf webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc 2>/dev/null || true
+
+      # ---- Linux：deb 安装包 ----
+      - name: Build & package (Linux)
+        if: matrix.goos == 'linux'
+        shell: bash
+        run: |
+          VERSION="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          cd apps/desktop
+
+          node sync-version.mjs "$VERSION"
+
+          wails build -ldflags "-X github.com/rss/go-server/internal/handlers.appVersion=$VERSION"
+
+          # deb 包（-edition deb，依赖 dpkg-deb）
+          FE_BIN=build/bin/Flore
+          go run ./cmd/package-tool -edition deb -version "$VERSION" -os linux -arch amd64 -feBin "$FE_BIN"
+          rm -rf build/Flore-portable
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -148,6 +177,7 @@ jobs:
             apps/desktop/build/flore-portable-${{ matrix.goos }}-${{ matrix.goarch }}-*.zip
             apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.exe
             apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.dmg
+            apps/desktop/build/flore_*.deb
 
   release:
     needs: build
@@ -256,6 +286,7 @@ jobs:
             "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg"
             "apps/desktop/build/flore-portable-windows-amd64-${V}.zip"
             "apps/desktop/build/flore-setup-windows-amd64-${V}.exe"
+            "apps/desktop/build/flore_${V}-1_amd64.deb"
             "apps/desktop/build/update.json"
           )
           for f in "${ASSETS[@]}"; do

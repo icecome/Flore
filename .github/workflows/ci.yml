@@ -50,5 +50,13 @@ jobs:
       - name: Build Go backend
         run: cd server/go && go build ./...
 
+      # 桌面壳编译检查：拦截 //go:build 标签错误与类型错误（不跑 wails build，GTK/WebKit 依赖成本高）。
+      # frontend/dist 有 //go:embed all:frontend/dist，需先建含占位文件的目录。
+      - name: Desktop compile check
+        run: |
+          mkdir -p apps/desktop/frontend/dist
+          touch apps/desktop/frontend/dist/.gitkeep
+          cd apps/desktop && go mod download && go build ./... && go vet ./...
+
       - name: Build frontend
         run: npm run build:web

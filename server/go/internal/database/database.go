@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 
 	"github.com/glebarez/sqlite"
@@ -12,6 +11,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/rss/go-server/internal/models"
+	"github.com/rss/go-server/pkg/paths"
 )
 
 var (
@@ -34,26 +34,12 @@ func DBPath() string {
 
 var resolvedDBPath string
 
-// defaultReaderDBPath 返回 Reader 默认数据库路径。
-// Windows: %LOCALAPPDATA%\Flore\reader.db
-// 其他平台: ~/.flore/reader.db
+// defaultReaderDBPath 返回 Reader 默认数据库路径（用户数据目录下的 reader.db）。
+// 用户数据目录策略统一由 paths.UserDataDir() 提供，避免与桌面壳双份维护。
 func defaultReaderDBPath() (string, error) {
-	var baseDir string
-	if runtime.GOOS == "windows" {
-		baseDir = os.Getenv("LOCALAPPDATA")
-		if baseDir == "" {
-			baseDir = os.Getenv("APPDATA")
-		}
-		if baseDir == "" {
-			baseDir = os.TempDir()
-		}
-		baseDir = filepath.Join(baseDir, "Flore")
-	} else {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get user home dir: %w", err)
-		}
-		baseDir = filepath.Join(home, ".flore")
+	baseDir, err := paths.UserDataDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user data dir: %w", err)
 	}
 	if err := os.MkdirAll(baseDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create database directory %s: %w", baseDir, err)

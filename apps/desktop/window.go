@@ -318,6 +318,3 @@ func (a *App) LoadWindowState() WindowState {
 	}
 	return state
 }
-
-// registerNotificationApp 将 Flore 注册到 Windows 注册表，使原生 Toast 显示应用名（Flore）
-// 而非 WebView2 的 origin（wails.localhost）。非 Windows 平台为 noop。

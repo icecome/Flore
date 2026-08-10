@@ -7,35 +7,12 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"git.sr.ht/~jackmordaunt/go-toast/v2"
 )
 
-func (a *App) registerNotificationApp() {
-	if err := toast.SetAppData(toast.AppData{AppID: "Flore"}); err != nil {
-		a.logger.Printf("register notification app failed: %v", err)
-	}
-}
-
-// ShowNotification 发送原生 Windows Toast 通知（应用名显示为 Flore）。
-// 供后台通知监听统一使用；非 Windows 平台为 noop。
+// ShowNotification 发送原生系统通知，供后台通知监听统一使用。
+// 保留为 Wails 绑定方法（前端 wailsjs 已生成），内部委托给平台实现。
 func (a *App) ShowNotification(title, body string) error {
-	if a.context() == nil {
-		return fmt.Errorf("app context not ready")
-	}
-	if title == "" {
-		title = "Flore"
-	}
-	ntf := toast.Notification{
-		AppID: "Flore",
-		Title: title,
-		Body:  body,
-	}
-	err := ntf.Push()
-	if err != nil {
-		a.logger.Printf("show notification failed: %v", err)
-	}
-	return err
+	return a.showNativeToast(title, body)
 }
 
 // startNotifyWatcher 后台轮询后端抓取状态，当检测到一轮抓取完成（fetching 下降沿）

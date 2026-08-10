@@ -6,9 +6,9 @@ import ContextMenu, { type ContextMenuItem } from './ContextMenu';
 import SettingsModal from './SettingsModal';
 import SearchBox from './SearchBox';
 import type { AppSettings } from '../utils/settings';
-import { getPlatform } from '../utils/api';
 import SourceAvatar from './SourceAvatar';
 import { useContextMenu } from '../hooks/useContextMenu';
+import { usePlatform } from '../hooks/usePlatform';
 import {
   buildSidebarSourceMenu,
   buildSidebarFolderMenu,
@@ -142,15 +142,8 @@ export default function Sidebar({
   unreadCountInScope = 0,
 }: Props) {
   // macOS 端独立标题栏已移除，侧边栏顶到窗口顶部；顶栏搜索按钮与交通灯共用一行
-  const [isMac, setIsMac] = useState(false);
-  const [macLoading, setMacLoading] = useState(true);
+  const { isMac, ready } = usePlatform();
   const [showSearch, setShowSearch] = useState(false);
-  useEffect(() => {
-    getPlatform()
-      .then((p) => setIsMac(p === 'darwin'))
-      .catch(() => setIsMac(false))
-      .finally(() => setMacLoading(false));
-  }, []);
 
   // 根据设置过滤订阅源（当前选中的源始终显示）
   // hideRead 保留"从未抓取过"的源（lastSuccessAt 为空），避免新导入源在抓取前被隐藏
@@ -330,7 +323,7 @@ export default function Sidebar({
 
   // 顶栏（搜索按钮行）为 macOS 专属：与交通灯共用一行，仅 mac 渲染。
   // 非 mac 永不渲染该行，避免平台未知期出现 28px 空占位行造成布局跳动。
-  // macLoading 仅用于门控非 mac 搜索框的出现时机（加载完成后才显示）。
+  // ready 仅用于门控非 mac 搜索框的出现时机（加载完成后才显示）。
   const showMacTop = isMac;
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-border bg-canvas">
@@ -350,7 +343,7 @@ export default function Sidebar({
           )}
         </div>
       )}
-      {isMac && !macLoading && showSearch && (
+      {isMac && ready && showSearch && (
         <div className="px-3 pb-2">
           <SearchBox
             query={searchKeyword}
@@ -361,7 +354,7 @@ export default function Sidebar({
           />
         </div>
       )}
-      {!isMac && !macLoading && (
+      {!isMac && ready && (
         <div className="flex flex-col gap-2.5 px-3 pb-2 pt-3">
           <SearchBox
             query={searchKeyword}

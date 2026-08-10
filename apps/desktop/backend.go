@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rss/go-server/pkg/paths"
 )
 
 func (a *App) startBackends() {
@@ -428,21 +430,15 @@ func (a *App) readerDatabasePath() string {
 	return filepath.Join(baseDir, "reader.db")
 }
 
-// userDataDirectory 返回用户数据目录，Windows 下优先使用 LOCALAPPDATA/APPDATA，否则使用 HOME/.flore。
+// userDataDirectory 返回用户数据目录，委托给 paths.UserDataDir() 统一实现。
+// 避免与后端 database.go 双份维护路径逻辑。HOME 不可用时回退当前目录。
 func (a *App) userDataDirectory() string {
-	if runtime.GOOS == "windows" {
-		for _, envName := range []string{"LOCALAPPDATA", "APPDATA"} {
-			if dir := os.Getenv(envName); dir != "" {
-				return filepath.Join(dir, "Flore")
-			}
-		}
-		return filepath.Join(os.TempDir(), "Flore")
-	}
-	home, err := os.UserHomeDir()
+	dir, err := paths.UserDataDir()
 	if err != nil {
-		home = "."
+		a.logger.Printf("failed to get user data dir: %v, fallback to current directory", err)
+		return "."
 	}
-	return filepath.Join(home, ".flore")
+	return dir
 }
 
 // GetBackendStatus 返回后端服务状态与动态地址，供前端在桌面模式下使用。
