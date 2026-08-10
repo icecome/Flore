@@ -215,7 +215,7 @@ func buildDeb(version, osArg, arch, binDir, outDir, appName, feBin *string) {
 		fatal("创建目录失败: %v", err)
 	}
 	desktopContent := fmt.Sprintf(
-		"[Desktop Entry]\nName=%s\nComment=%s RSS Reader\nExec=%s\nIcon=%s\nTerminal=false\nType=Application\nCategories=Network;Reader;\nStartupNotify=true\n",
+		"[Desktop Entry]\nName=%s\nComment=%s RSS Reader\nExec=/usr/bin/%s\nIcon=%s\nTerminal=false\nType=Application\nCategories=Network;Reader;\nStartupNotify=true\n",
 		*appName, *appName, *appName, *appName,
 	)
 	if err := os.WriteFile(desktopPath, []byte(desktopContent), 0o644); err != nil {
