@@ -107,7 +107,7 @@ func TestOPMLImport(t *testing.T) {
 </opml>`
 
 	// OPML 导入应该能够成功
-	if err := s.ImportOPML(opmlContent); err != nil {
+	if _, err := s.ImportOPML(opmlContent); err != nil {
 		t.Fatalf("OPML import failed: %v", err)
 	}
 

@@ -98,6 +98,10 @@ func (s *ReaderService) RestoreBackup(name string) error {
 	return s.restoreFromFile(tmpPath)
 }
 
+// maxBackupExtractSize 备份 zip 单条目解压大小上限（256MB，与上传限制对齐），
+// 防止恶意构造的 zip 声明巨大条目导致磁盘耗尽（zip bomb，M-S2）。
+const maxBackupExtractSize = 256 << 20
+
 // extractDBFromBackup 从备份 zip 中解压出数据库文件到临时路径
 func (s *ReaderService) extractDBFromBackup(name string) (string, error) {
 	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || !strings.HasSuffix(name, ".zip") {
@@ -126,12 +130,18 @@ func (s *ReaderService) extractDBFromBackup(name string) (string, error) {
 	}
 	defer rc.Close()
 
+	// 解压前先检查条目声明的未压缩大小，超限直接拒绝（zip bomb 防护第一道）
+	if dbEntry.UncompressedSize64 > maxBackupExtractSize {
+		return "", fmt.Errorf("backup database entry too large (%d bytes)", dbEntry.UncompressedSize64)
+	}
+
 	tmpFile, err := os.CreateTemp("", "flore-restore-*.db")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	if _, err := io.Copy(tmpFile, rc); err != nil {
+	// 流式解压并限制写入量，即使元数据被伪造也不至于写穿磁盘（第二道防线）
+	if _, err := io.Copy(tmpFile, io.LimitReader(rc, maxBackupExtractSize+1)); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to extract database: %w", err)
@@ -220,9 +230,9 @@ func cleanupOldBackups(dbPath string, maxKeep int) {
 		})
 	}
 	// 按修改时间倒序，保留最新的 maxKeep 个
-	for i, j := 0, len(backups)-1; i < j; i, j = i+1, j-1 {
-		backups[i], backups[j] = backups[j], backups[i]
-	}
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].modTime.After(backups[j].modTime)
+	})
 	for i := maxKeep; i < len(backups); i++ {
 		if err := os.Remove(backups[i].fullPath); err != nil {
 			slog.Warn("failed to remove old backup", "path", backups[i].fullPath, "error", err)
@@ -259,22 +269,25 @@ func (s *ReaderService) CreateCompressedBackup() (string, error) {
 	}
 	defer os.Remove(snapshotPath)
 
-	// 导出配置（Settings 表）
+	// 导出配置（Settings 表）与订阅源（OPML）：失败不阻断备份（数据库最重要），
+	// 但将失败原因写入 backup-warnings.txt，使备份缺口可见（m-04）
+	var warnings []string
 	cfgJSON, err := s.exportSettingsJSON()
 	if err != nil {
 		slog.Warn("failed to export settings for backup", "error", err)
+		warnings = append(warnings, fmt.Sprintf("settings 导出失败: %v", err))
 	}
 
-	// 导出订阅源（OPML）
 	opmlXML, err := s.ExportOPML()
 	if err != nil {
 		slog.Warn("failed to export OPML for backup", "error", err)
+		warnings = append(warnings, fmt.Sprintf("OPML 导出失败: %v", err))
 	}
 
 	// 打包为 ZIP
 	zipName := fmt.Sprintf("backup-%s.zip", timestamp)
 	zipPath := filepath.Join(backupDir, zipName)
-	if err := compressToZipFull(snapshotPath, filepath.Base(snapshotPath), cfgJSON, opmlXML, zipPath); err != nil {
+	if err := compressToZipFull(snapshotPath, filepath.Base(snapshotPath), cfgJSON, opmlXML, strings.Join(warnings, "\n"), zipPath); err != nil {
 		return "", fmt.Errorf("failed to compress backup: %w", err)
 	}
 
@@ -321,8 +334,10 @@ func compressToZip(srcPath, dstPath string) error {
 	return outFile.Sync()
 }
 
-// compressToZipFull 将数据库 + 配置 + OPML 打包为全量 ZIP 备份
-func compressToZipFull(dbPath, dbName string, settingsJSON, opmlXML string, dstPath string) error {
+// compressToZipFull 将数据库 + 配置 + OPML 打包为全量 ZIP 备份。
+// warnings 非空时额外写入 backup-warnings.txt，使备份的完整性缺口可见（m-04），
+// 避免"配置/订阅源导出失败但仍显示备份成功"被静默吞掉。
+func compressToZipFull(dbPath, dbName string, settingsJSON, opmlXML, warnings, dstPath string) error {
 	outFile, err := os.Create(dstPath)
 	if err != nil {
 		return err
@@ -362,6 +377,17 @@ func compressToZipFull(dbPath, dbName string, settingsJSON, opmlXML string, dstP
 			zw.Close()
 			return err
 		} else if _, err := fw.Write([]byte(opmlXML)); err != nil {
+			zw.Close()
+			return err
+		}
+	}
+
+	// 写入导出警告（如存在）
+	if warnings != "" {
+		if fw, err := zw.Create("backup-warnings.txt"); err != nil {
+			zw.Close()
+			return err
+		} else if _, err := fw.Write([]byte(warnings)); err != nil {
 			zw.Close()
 			return err
 		}
@@ -436,30 +462,11 @@ func (s *ReaderService) GetBackupContents(name string) (*BackupContents, error) 
 		return nil, fmt.Errorf("invalid backup name")
 	}
 	zipPath := filepath.Join(getBackupDir(database.DBPath()), name)
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open backup: %w", err)
-	}
-	defer r.Close()
-
-	info, err := os.Stat(zipPath)
+	contents, err := s.GetBackupContentsFromPath(zipPath)
 	if err != nil {
 		return nil, err
 	}
-	contents := &BackupContents{
-		Name: name,
-		Size: info.Size(),
-	}
-	for _, f := range r.File {
-		switch {
-		case strings.HasSuffix(strings.ToLower(f.Name), ".db"):
-			contents.HasDB = true
-		case strings.HasSuffix(f.Name, "settings.json"):
-			contents.HasCfg = true
-		case strings.HasSuffix(f.Name, ".opml"):
-			contents.HasOpm = true
-		}
-	}
+	contents.Name = name
 	return contents, nil
 }
 
@@ -526,7 +533,7 @@ func (s *ReaderService) RestoreConfigFromBackup(name string) error {
 			if err != nil {
 				continue
 			}
-			settingsData, err = io.ReadAll(rc)
+			settingsData, err = io.ReadAll(io.LimitReader(rc, maxBackupExtractSize+1))
 			if err != nil {
 				rc.Close()
 				continue
@@ -537,6 +544,9 @@ func (s *ReaderService) RestoreConfigFromBackup(name string) error {
 	}
 	if len(settingsData) == 0 {
 		return fmt.Errorf("no settings.json found in backup")
+	}
+	if len(settingsData) > maxBackupExtractSize {
+		return fmt.Errorf("settings.json too large in backup")
 	}
 
 	var settings map[string]string
@@ -565,7 +575,7 @@ func (s *ReaderService) RestoreOPMLFromBackup(name string) error {
 			if err != nil {
 				continue
 			}
-			b, err := io.ReadAll(rc)
+			b, err := io.ReadAll(io.LimitReader(rc, maxBackupExtractSize+1))
 			if err != nil {
 				rc.Close()
 				continue
@@ -578,7 +588,11 @@ func (s *ReaderService) RestoreOPMLFromBackup(name string) error {
 	if opmlData == "" {
 		return fmt.Errorf("no opml file found in backup")
 	}
-	return s.ImportOPML(opmlData)
+	if len(opmlData) > maxBackupExtractSize {
+		return fmt.Errorf("opml file too large in backup")
+	}
+	_, err = s.ImportOPML(opmlData)
+	return err
 }
 
 // CleanupBackups 按保留策略清理过期备份

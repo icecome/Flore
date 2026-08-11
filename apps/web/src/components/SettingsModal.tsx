@@ -98,6 +98,13 @@ const INTERVAL_OPTIONS: { value: number; label: string }[] = [
   { value: 1440, label: '24 小时' },
 ];
 
+// 首次抓取时间窗口选项（T-v02-02）：0=全部
+const INITIAL_FETCH_WINDOW_OPTIONS: { value: number; label: string }[] = [
+  { value: 7, label: '最近 7 天' },
+  { value: 30, label: '最近 30 天' },
+  { value: 0, label: '全部历史' },
+];
+
 const OPEN_MODE_OPTIONS: { value: AppSettings['openArticleMode']; label: string }[] = [
   { value: 'rss', label: '原文模式' },
   { value: 'readability', label: '全文模式' },
@@ -660,13 +667,24 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
 
             <Section title="抓取与同步">
               <Row
-                title="默认抓取间隔"
-                desc="订阅源将按此间隔自动抓取更新。"
+                title="自动抓取周期"
+                desc="所有订阅源按此周期统一轮询更新；未变化的源会通过 304 协商自动跳过，不会重复抓取。"
                 control={
                   <Select
                     value={settings.defaultInterval}
                     options={INTERVAL_OPTIONS}
                     onChange={(v) => updateSetting('defaultInterval', Number(v))}
+                  />
+                }
+              />
+              <Row
+                title="首次抓取范围"
+                desc="新订阅源首次抓取时，只回填指定天数内的文章，避免历史文章淹没列表。"
+                control={
+                  <Select
+                    value={settings.initialFetchWindowDays}
+                    options={INITIAL_FETCH_WINDOW_OPTIONS}
+                    onChange={(v) => updateSetting('initialFetchWindowDays', Number(v))}
                   />
                 }
               />

@@ -128,7 +128,7 @@ export function Select({
     <select
       value={value}
       onChange={(e) => onChange(isNumber ? Number(e.target.value) : e.target.value)}
-      className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-[13px] text-primary outline-none focus:border-primary"
+      className="rounded-md border border-border bg-surface pl-2.5 pr-8 py-1.5 text-[13px] text-primary outline-none focus:border-primary"
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>

@@ -220,6 +220,38 @@ jobs:
           cp artifacts/flore-*/* apps/desktop/build/
           ls -la apps/desktop/build/
 
+      # ---- 体积门禁（T-v02-01）：防止安装包悄悄变胖 ----
+      # 读取最终产物体积，超过阈值即 CI 失败。
+      # 冷启动 ≤1.5s 不做自动门禁（零遥测、无低成本自动化手段），保留为发版手动回归项。
+      - name: Size budget check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd apps/desktop/build
+          V="${{ steps.ver.outputs.version }}"
+          fail=0
+          check() {
+            local file="$1" limit_mb="$2" label="$3"
+            if [ ! -f "$file" ]; then
+              echo "  skip (not built): $label"
+              return 0
+            fi
+            local size_mb
+            size_mb=$(du -m "$file" | cut -f1)
+            echo "  $label: ${size_mb}MB (limit ${limit_mb}MB)"
+            if [ "$size_mb" -gt "$limit_mb" ]; then
+              echo "::error::体积门禁失败 $label = ${size_mb}MB > ${limit_mb}MB"
+              fail=1
+            fi
+          }
+          check "flore-portable-windows-amd64-${V}.zip" 35 "Windows 便携 zip"
+          check "flore-setup-windows-amd64-${V}.exe"   45 "Windows 安装 exe"
+          check "flore_${V}-1_amd64.deb"               40 "Linux deb"
+          if [ -f "flore-setup-darwin-arm64-${V}.dmg" ]; then
+            echo "  macOS dmg: $(du -m "flore-setup-darwin-arm64-${V}.dmg" | cut -f1)MB (仅观察)"
+          fi
+          exit "$fail"
+
       - name: Generate update manifest
         run: |
           cd apps/desktop

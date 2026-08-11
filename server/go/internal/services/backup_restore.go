@@ -68,6 +68,9 @@ func (s *ReaderService) restoreFromFile(tmpPath string) error {
 		if rbErr := copyFile(bakPath, currentPath); rbErr != nil {
 			slog.Error("restore: rollback copy also failed", "error", rbErr)
 		}
+		// 无论回滚成败，都必须重新打开数据库连接并恢复运行时状态（M-R1），
+		// 否则进程内所有后续 DB 操作都在已关闭的连接上失败，只能重启恢复。
+		s.reinitAfterRestoreFailure()
 		return fmt.Errorf("failed to replace database file: %w", err)
 	}
 	slog.Info("restore: file replaced")
@@ -120,13 +123,28 @@ func readMaxKeepFromDB(db *gorm.DB) int {
 	return maxKeep
 }
 
+// reinitAfterRestoreFailure 恢复流程失败后重新打开数据库连接。
+// 数据库文件替换失败时连接已被 closeAndReleaseLocks 关闭，必须重开，
+// 否则进程内所有 DB 操作失败（M-R1）。重开失败仅记日志——调用方已返回错误，
+// 进程将在下一次启动时自愈。
+func (s *ReaderService) reinitAfterRestoreFailure() {
+	if err := database.Init(); err != nil {
+		slog.Error("restore: reinit after failure failed", "error", err)
+	}
+	s.db = database.GetDB()
+	s.invalidateUnreadCount()
+	slog.Info("restore: database reinitialized after failure")
+}
+
 // restoreViaCloseAndCopy 在 VACUUM INTO 失败时的降级路径：先关闭数据库，再拷贝文件
 func (s *ReaderService) restoreViaCloseAndCopy(tmpPath, currentPath, bakPath string) error {
 	if err := closeAndReleaseLocks(currentPath); err != nil {
-		return err
+		s.reinitAfterRestoreFailure()
+		return fmt.Errorf("failed to close database for fallback: %w", err)
 	}
 	slog.Info("restore: fallback: database closed, copying backup")
 	if fbErr := copyFile(currentPath, bakPath); fbErr != nil {
+		s.reinitAfterRestoreFailure()
 		return fmt.Errorf("failed to create backup via fallback: %w", fbErr)
 	}
 	if err := copyFile(tmpPath, currentPath); err != nil {
@@ -134,6 +152,8 @@ func (s *ReaderService) restoreViaCloseAndCopy(tmpPath, currentPath, bakPath str
 		if rbErr := copyFile(bakPath, currentPath); rbErr != nil {
 			slog.Error("restore: rollback copy also failed", "error", rbErr)
 		}
+		// 连接已被关闭，无论回滚成败都重连（M-R1）
+		s.reinitAfterRestoreFailure()
 		return fmt.Errorf("failed to replace database file: %w", err)
 	}
 	return nil

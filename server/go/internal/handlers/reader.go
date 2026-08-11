@@ -246,18 +246,18 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		api.POST("/cache/rebuild-search", h.RebuildSearchIndex)
 		api.POST("/database/vacuum", h.VacuumDatabase)
 
-		// 备份管理
-		api.GET("/backups", h.ListBackups)
-		api.POST("/backups/create", h.CreateBackup)
+		// 备份管理（全部纳入敏感组：备份含全量数据库，下载/恢复/导入/清理均可被
+		// 同机进程滥用，与上方 database/export、database/restore 的防护口径一致）
+		sensitive.GET("/backups", h.ListBackups)
+		sensitive.POST("/backups/create", h.CreateBackup)
 		sensitive.DELETE("/backups/:name", h.DeleteBackup)
-		api.POST("/backups/cleanup", h.CleanupBackups)
-		api.POST("/backups/:name/restore", h.RestoreBackup)
-		api.GET("/backups/:name/download", h.DownloadBackup)
-		api.GET("/backups/:name/contents", h.GetBackupContents)
+		sensitive.POST("/backups/cleanup", h.CleanupBackups)
+		sensitive.POST("/backups/:name/restore", h.RestoreBackup)
+		sensitive.GET("/backups/:name/download", h.DownloadBackup)
+		sensitive.GET("/backups/:name/contents", h.GetBackupContents)
 		sensitive.POST("/backups/:name/restore-config", h.RestoreConfigFromBackup)
 		sensitive.POST("/backups/:name/restore-opml", h.RestoreOPMLFromBackup)
-		// 新增：导入外部备份并返回内容清单
-		api.POST("/backups/restore/import", h.ImportBackupAndValidate)
+		sensitive.POST("/backups/restore/import", h.ImportBackupAndValidate)
 
 		// 设置（Settings 表，键值对存储）
 		api.GET("/settings", h.GetSettings)

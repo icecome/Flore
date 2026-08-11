@@ -113,6 +113,7 @@ export interface AppSettings {
 
   // === 通用：抓取与同步 ===
   defaultInterval: number;
+  initialFetchWindowDays: number; // 首次抓取时间窗口（天），0=全部
   autoFetchOnStart: boolean;
 
   // === 通用：文章打开方式 ===
@@ -180,7 +181,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   markReadHoverDelay: 800,
 
   // 通用：抓取与同步
-  defaultInterval: 120,
+  // 现为「全量轮询周期」：所有订阅源按此周期统一轮询，未变化的源靠 HTTP 304 协商跳过。
+  defaultInterval: 30,
+  initialFetchWindowDays: 7,
   autoFetchOnStart: false,
 
   // 通用：文章打开方式

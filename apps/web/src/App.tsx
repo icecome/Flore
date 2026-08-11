@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import ArticleList from './components/ArticleList';
 import Reader from './components/Reader';
 import TitleBar from './components/TitleBar';
+import OnboardingWelcome from './components/OnboardingWelcome';
 import AddSourceModal, { type SourceFormData } from './components/AddSourceModal';
 import MoveSourceModal from './components/MoveSourceModal';
 import EditSourceModal from './components/EditSourceModal';
@@ -244,7 +245,6 @@ function App() {
     setSelectedItem(item);
     setFocusedItemId(item.id);
     if (isMobile) setMobileView('reader');
-    setLoadingReader(true);
 
     if (!item.isRead) {
       try {
@@ -256,8 +256,6 @@ function App() {
         showToast('标记已读失败');
       }
     }
-
-    setLoadingReader(false);
   }, [settings.openArticleMode, isMobile, updateItemReadState, updateSourceUnreadCount]);
 
   // 切换收藏
@@ -702,8 +700,10 @@ function App() {
 
   // 导入 OPML（错误向上抛给 ImportOPMLModal 展示）
   const handleImportOPML = useCallback(async (xml: string) => {
+    let imported = 0;
     try {
-      await importOPML(xml);
+      const res = await importOPML(xml);
+      imported = res.imported ?? 0;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '导入失败';
       // 如果错误消息是 internal_server_error，给出更友好的提示
@@ -713,6 +713,9 @@ function App() {
       throw err;
     }
     await Promise.all([fetchFoldersRef.current(), fetchSourcesRef.current()]);
+    if (imported > 0) {
+      showToast('已导入 ' + imported + ' 个订阅源，正在抓取最新文章…');
+    }
   }, []);
 
   // 导出 OPML
@@ -817,6 +820,13 @@ function App() {
         />
       )}
 
+      {sources.length === 0 ? (
+        <OnboardingWelcome
+          onImport={() => setShowImportModal(true)}
+          onAddSource={() => setShowAddModal(true)}
+          onSourcesChanged={refreshSourceStructure}
+        />
+      ) : (
       <div className="flex flex-1 min-w-0 overflow-hidden">
         <div
           className={`w-[360px] min-w-[360px] h-full bg-canvas border-r border-border-subtle overflow-hidden ${
@@ -878,6 +888,7 @@ function App() {
           />
         </div>
       </div>
+      )}
 
       {showAddModal && (
         <AddSourceModal

@@ -2,8 +2,7 @@ package handlers
 
 import (
 	"fmt"
-	"io"
-	"mime/multipart"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,68 +180,75 @@ func (h *ReaderHandler) GetBackupContents(c *gin.Context) {
 	c.JSON(http.StatusOK, contents)
 }
 
-// ImportBackupAndValidate 导入外部备份文件并返回内容清单（供前端选择恢复粒度）
-// 接收 multipart/form-data，包含一个 "backup" 文件字段
+// ImportBackupAndValidate 导入外部备份文件到备份目录，并返回内容清单（供前端选择恢复粒度）。
+// 接收 multipart/form-data，包含一个 "backup" 文件字段。
+// 修复：保存到备份目录（而非临时目录），使备份对 ListBackups/RestoreBackup 可见。
 func (h *ReaderHandler) ImportBackupAndValidate(c *gin.Context) {
-	// 从 multipart form 获取上传的 backup.zip 文件
+	// 限制上传大小（对齐 ImportDatabase 的 256MB），防止恶意/意外大文件耗尽磁盘
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<20)
 	file, err := c.FormFile("backup")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get backup file"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get backup file or file too large"})
 		return
 	}
 
-	// 保存到临时文件
-	tmpPath, err := h.saveTempUpload(file)
-	if err != nil {
+	// 安全化文件名，防止路径遍历攻击
+	safeName := filepath.Base(file.Filename)
+	if !strings.HasSuffix(strings.ToLower(safeName), ".zip") {
+		safeName += ".zip"
+	}
+
+	backupDir := h.service.BackupDirPath()
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create backup directory"})
+		return
+	}
+
+	// 重名时生成唯一文件名（追加 -1/-2 后缀），避免静默覆盖已有备份（m-11）
+	backupPath := filepath.Join(backupDir, safeName)
+	if _, err := os.Stat(backupPath); err == nil {
+		base := strings.TrimSuffix(safeName, ".zip")
+		for i := 1; ; i++ {
+			alt := fmt.Sprintf("%s-%d.zip", base, i)
+			if _, statErr := os.Stat(filepath.Join(backupDir, alt)); os.IsNotExist(statErr) {
+				safeName = alt
+				backupPath = filepath.Join(backupDir, alt)
+				break
+			}
+		}
+	}
+
+	// 保存上传文件到备份目录（而非临时目录），使用 Gin 的 SaveUploadedFile
+	if err := c.SaveUploadedFile(file, backupPath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save backup file"})
 		return
 	}
-	defer os.Remove(tmpPath)
 
-	// 读取备份内容清单
-	contents, err := h.service.GetBackupContentsFromPath(tmpPath)
+	// 验证备份文件内容，无效则删除
+	contents, err := h.service.GetBackupContentsFromPath(backupPath)
 	if err != nil {
+		if rmErr := os.Remove(backupPath); rmErr != nil {
+			slog.Warn("failed to remove invalid backup file", "name", safeName, "error", rmErr)
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid backup file: " + err.Error()})
 		return
 	}
 
-	// 返回清单信息
+	info, err := os.Stat(backupPath)
+	if err != nil {
+		os.Remove(backupPath)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read backup file info"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"name":    file.Filename,
+		"name":    safeName,
+		"size":    info.Size(),
+		"modTime": info.ModTime().Format("2006-01-02 15:04:05"),
 		"hasDb":   contents.HasDB,
 		"hasCfg":  contents.HasCfg,
-		"hasOpml": contents.HasOpm, // 修复：正确使用 HasOpm 字段名
+		"hasOpml": contents.HasOpm,
 	})
-}
-
-// saveTempUpload 保存上传文件到临时路径（限制 256MB）
-func (h *ReaderHandler) saveTempUpload(file *multipart.FileHeader) (string, error) {
-	src, err := file.Open()
-	if err != nil {
-		return "", err
-	}
-	defer src.Close()
-
-	tmpFile, err := os.CreateTemp("", "flore-restore-import-*.zip")
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if err != nil {
-			os.Remove(tmpFile.Name())
-		}
-	}()
-
-	_, err = io.Copy(tmpFile, io.LimitReader(src, 256<<20))
-	if err != nil {
-		tmpFile.Close()
-		return "", err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return "", err
-	}
-
-	return tmpFile.Name(), nil
 }
 
 // RestoreConfigFromBackup 从备份中仅恢复配置项

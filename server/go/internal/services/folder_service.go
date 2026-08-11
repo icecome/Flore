@@ -138,12 +138,22 @@ type opmlOutline struct {
 //   - Go 标准库 encoding/xml 默认不展开 DTD 实体，billion laughs 等实体扩展攻击天然无效
 //   - handler 层已通过 http.MaxBytesReader 限制 body 大小为 10MB
 //   - 此处额外限制 outline 节点总数与递归深度，防止深层嵌套导致栈溢出或节点爆炸消耗内存
-func (s *ReaderService) ImportOPML(xmlData string) error {
+func (s *ReaderService) ImportOPML(xmlData string) (int, error) {
+	// 计导入前源数，用于计算导入量
+	var before int64
+	s.getDb().Model(&models.Source{}).Count(&before)
+
 	doc, err := s.parseOPMLDocument(xmlData)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return s.importOPMLBody(doc.Body.Outlines)
+	if err := s.importOPMLBody(doc.Body.Outlines); err != nil {
+		return 0, err
+	}
+
+	var after int64
+	s.getDb().Model(&models.Source{}).Count(&after)
+	return int(after - before), nil
 }
 
 func (s *ReaderService) parseOPMLDocument(xmlData string) (*opmlDocument, error) {

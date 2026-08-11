@@ -7,32 +7,39 @@ import (
 	"time"
 )
 
-// Scheduler 最小后台调度器：按订阅源 interval 周期性向 Coordinator 提交抓取任务。
+// Scheduler 最小后台调度器：按全局轮询周期周期性向 Coordinator 提交全部 active 源的抓取任务。
 //
-// 职责极简：到点查询需抓取的源，调用 coordinator.SubmitAll。
-// 不再做并发控制、不去重、不加 atomic 标志——这些都由 Coordinator 统一负责。
+// 设计原则（全量轮询 + 304 协商）：
+//   - 不再做「到期才抓」的筛选——RSS 源何时发文章不可预测，「到期制」必然漏抓已发布文章。
+//   - 每个轮询周期提交所有 active 源（跳过退避中的坏源），未变化的源靠 HTTP 304 协商零成本跳过。
+//   - 因此无论手动刷新还是自动调度，源内已正常发布的文章一定会被抓到，行为完全一致。
+// 职责极简：到点调用 coordinator.SubmitAllSources，由 Coordinator 统一负责去重/并发/退避。
 type Scheduler struct {
-	service  *ReaderService
-	interval time.Duration
-	ticker   *time.Ticker
-	stop     chan struct{}
-	wg       sync.WaitGroup
-	running  bool
-	mu       sync.Mutex
+	service *ReaderService
 
+	// checkInterval 检查节拍：多久判断一次「是否到了轮询时间」，与轮询周期解耦。
+	checkInterval time.Duration
+	ticker        *time.Ticker
+	stop          chan struct{}
+	wg            sync.WaitGroup
+	running       bool
+	mu            sync.Mutex
+
+	lastFullPollAt  time.Time // 上次全量轮询时间，用于按 fetchInterval/defaultInterval 节流
 	lastBackupAt    time.Time // 上次自动备份时间
 	lastRetentionAt time.Time // 上次文章清理时间
 }
 
-// NewScheduler 创建调度器。checkInterval 指定检查周期，默认 5 分钟。
+// NewScheduler 创建调度器。checkInterval 指定检查节拍（默认 1 分钟），
+// 实际全量轮询周期由设置表 fetchInterval/defaultInterval 控制（默认 30 分钟）。
 func NewScheduler(service *ReaderService, checkInterval time.Duration) *Scheduler {
 	if checkInterval <= 0 {
-		checkInterval = 5 * time.Minute
+		checkInterval = 1 * time.Minute
 	}
 	sch := &Scheduler{
-		service:  service,
-		interval: checkInterval,
-		stop:     make(chan struct{}),
+		service:       service,
+		checkInterval: checkInterval,
+		stop:          make(chan struct{}),
 	}
 	sch.loadPersistedScheduleState()
 	return sch
@@ -65,8 +72,11 @@ func (sch *Scheduler) persistLastRetentionAt(t time.Time) {
 	}
 }
 
-// Start 启动调度器。启动后立即触发首轮抓取（去重保护下与周期抓取并发无害），
-// 之后按 checkInterval 周期触发。
+// Start 启动调度器。首轮行为遵循「启动时自动抓取」设置（autoFetchOnStart，由前端拥有）：
+//   - 开启：立即全量轮询一次，打开即最新；
+//   - 关闭：不立即抓取，把首次轮询推迟到第一个周期（fetchInterval），
+//     避免与前端 useFetchOrchestration 的启动抓取逻辑冲突。
+// 之后按 checkInterval 节拍检查，达到轮询周期则再触发全量抓取。
 func (sch *Scheduler) Start() {
 	sch.mu.Lock()
 	defer sch.mu.Unlock()
@@ -74,22 +84,24 @@ func (sch *Scheduler) Start() {
 		return
 	}
 	sch.running = true
-	sch.ticker = time.NewTicker(sch.interval)
+	sch.ticker = time.NewTicker(sch.checkInterval)
 
-	// 校正历史数据：旧逻辑可能把 nextCheckAtUnix 推到远未来，导致源长期不被调度
-	sch.resetStaleNextCheckAt()
-
-	// 首轮立即执行
-	sch.wg.Add(1)
-	go func() {
-		defer sch.wg.Done()
-		select {
-		case <-sch.stop:
-			return
-		default:
-			sch.runOnce()
-		}
-	}()
+	if sch.service.GetSettingBool("autoFetchOnStart", false) {
+		// 首轮立即执行（去重保护下与周期抓取并发无害）
+		sch.wg.Add(1)
+		go func() {
+			defer sch.wg.Done()
+			select {
+			case <-sch.stop:
+				return
+			default:
+				sch.runOnce()
+			}
+		}()
+	} else {
+		// 关闭启动抓取：把上次全量轮询时间置为现在，启动后首个周期才轮询
+		sch.lastFullPollAt = time.Now()
+	}
 
 	// 周期性调度
 	sch.wg.Add(1)
@@ -122,20 +134,22 @@ func (sch *Scheduler) Stop() {
 	sch.wg.Wait()
 }
 
-// runOnce 执行一轮调度：查询到期的源并提交给 Coordinator，并触发备份与文章清理。
-// 使用索引查询（NextCheckAtUnix <= now）替代全表扫描，O(log N) 而非 O(N)。
+// runOnce 执行一轮调度：达到轮询周期则全量提交所有 active 源给 Coordinator，
+// 并触发备份与文章清理。未达轮询周期则跳过抓取（备份/清理有各自节流）。
 func (sch *Scheduler) runOnce() {
-	toFetch, err := sch.service.getDueSources()
-	if err != nil {
-		slog.Error("scheduler: failed to query due sources", "error", err)
-		return
-	}
+	periodMin := sch.pollPeriodMinutes()
+	sch.mu.Lock()
+	due := sch.lastFullPollAt.IsZero() || time.Since(sch.lastFullPollAt) >= time.Duration(periodMin)*time.Minute
+	sch.mu.Unlock()
 
-	if len(toFetch) > 0 && sch.service.Coordinator() != nil {
-		n := sch.service.Coordinator().SubmitAll(toFetch)
-		slog.Info("scheduler: submitted fetch tasks", "total", len(toFetch), "queued", n)
+	if due && sch.service.Coordinator() != nil {
+		n := sch.service.Coordinator().SubmitAllSources(true)
+		slog.Info("scheduler: full-poll submitted", "queued", n, "period_min", periodMin)
+		sch.mu.Lock()
+		sch.lastFullPollAt = time.Now()
+		sch.mu.Unlock()
 	} else {
-		slog.Debug("scheduler: no sources due for fetch")
+		slog.Debug("scheduler: full-poll not due yet", "period_min", periodMin)
 	}
 
 	// 备份与文章清理（与抓取独立，互不阻塞）
@@ -147,52 +161,16 @@ func (sch *Scheduler) runOnce() {
 	}()
 }
 
-// getDueSources 查询需要抓取的源 ID 列表。
-// 优先使用 NextCheckAtUnix 索引（自适应调度），兼容无此字段的旧数据（回退到固定 interval）。
-func (s *ReaderService) getDueSources() ([]int, error) {
-	type dueSource struct {
-		SourceID int `gorm:"column:source_id"`
+// pollPeriodMinutes 返回全量轮询周期（分钟）。优先 fetchInterval，回退 defaultInterval，默认 30。
+// 旧的「到期制」调度已废弃：RSS 源发布时间不可预测，按固定周期全量轮询 + 304 协商才是最优解。
+func (sch *Scheduler) pollPeriodMinutes() int {
+	if m := sch.service.GetSettingInt("fetchInterval", 0); m > 0 {
+		return m
 	}
-	var rows []dueSource
-	now := time.Now().Unix()
-
-	// 查询所有 active 源中 NextCheckAtUnix <= now 或 NextCheckAtUnix = 0（旧数据/首次）的源
-	if err := s.getDb().Raw(`
-		SELECT h.sourceId as source_id
-		FROM SourceHealth h
-		JOIN Source s ON s.id = h.sourceId
-		WHERE s.active = true
-		  AND (h.nextCheckAtUnix <= ? OR h.nextCheckAtUnix = 0)
-		  AND h.nextRetryAtUnix = 0
-		ORDER BY h.nextCheckAtUnix NULLS FIRST
-	`, now).Scan(&rows).Error; err != nil {
-		return nil, err
+	if m := sch.service.GetSettingInt("defaultInterval", 30); m > 0 {
+		return m
 	}
-
-	ids := make([]int, len(rows))
-	for i, row := range rows {
-		ids[i] = row.SourceID
-	}
-	return ids, nil
-}
-
-// resetStaleNextCheckAt 校正历史数据：被旧逻辑推到远未来（默认 3 天）的 nextCheckAtUnix
-// 会导致源长期不被调度。启动时（首轮抓取前）将未处于失败退避的源拉回 now，使其立即进入调度。
-func (sch *Scheduler) resetStaleNextCheckAt() {
-	now := time.Now().Unix()
-	res := sch.service.getDb().Exec(`
-		UPDATE SourceHealth
-		SET nextCheckAtUnix = ?
-		WHERE nextRetryAtUnix = 0
-		  AND nextCheckAtUnix > ?
-	`, now, now)
-	if res.Error != nil {
-		slog.Warn("scheduler: failed to reset stale nextCheckAt", "error", res.Error)
-		return
-	}
-	if res.RowsAffected > 0 {
-		slog.Info("scheduler: reset stale nextCheckAt for sources", "count", res.RowsAffected)
-	}
+	return 30
 }
 
 // maybeRunBackup 根据设置决定是否触发自动备份

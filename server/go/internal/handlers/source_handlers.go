@@ -184,11 +184,12 @@ func (h *ReaderHandler) ImportOPML(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.ImportOPML(string(xml)); err != nil {
+	if count, err := h.service.ImportOPML(string(xml)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": safeError(err.Error())})
 		return
+	} else {
+		c.JSON(http.StatusOK, gin.H{"imported": count})
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // ExportOPML 导出 OPML

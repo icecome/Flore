@@ -494,6 +494,4 @@ func (s *ReaderService) GetOriginalURL(id int) (string, error) {
 	return item.Link, nil
 }
 
-// updateSourceHealth 更新订阅源健康状态
-// newCount 为本轮新增文章数，用于自适应调度计算 NextCheckAtUnix
-// interval 为该源的抓取间隔（分钟），用于自适应调度计算下次检查时间
+// 注：updateSourceHealth 见 source_service.go；自「全量轮询 + 304 协商」重构后不再做自适应调度。

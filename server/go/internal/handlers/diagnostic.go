@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/rss/go-server/internal/database"
+	"github.com/rss/go-server/internal/models"
 	"github.com/rss/go-server/internal/services"
 )
 
@@ -29,10 +31,14 @@ type DiagnosticItem struct {
 
 // GenerateDiagnosticPackage handles the diagnostic package generation request
 func (h *ReaderHandler) GenerateDiagnosticPackage(c *gin.Context) {
-	// 安全：仅允许写入临时目录，避免用户可控 output 参数导致任意目录写入（审查 B-08）
+	// 安全：仅允许写入临时目录，避免用户可控 output 参数导致任意目录写入（审查 B-08）。
+	// 前缀判断必须带路径分隔符（tempDir + separator），否则 C:\...\Temp2\xxx 会因共享
+	// "Temp" 前缀绕过校验——与下方 ExtractDiagnosticPackage 的校验口径一致（m-08）。
 	outputDir := os.TempDir()
+	tempDir := filepath.Clean(os.TempDir())
 	if raw := c.Query("output"); raw != "" {
-		if cleaned := filepath.Clean(raw); strings.HasPrefix(cleaned, os.TempDir()) {
+		cleaned := filepath.Clean(raw)
+		if cleaned == tempDir || strings.HasPrefix(cleaned, tempDir+string(os.PathSeparator)) {
 			outputDir = cleaned
 		}
 	}
@@ -74,16 +80,6 @@ func (h *ReaderHandler) GenerateDiagnosticPackage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"path": zipPath, "size": len(data)})
 }
 
-// ListDiagnosticItems returns the available items for the diagnostic package
-func (h *ReaderHandler) ListDiagnosticItems(c *gin.Context) {
-	items := []DiagnosticItem{
-		{Key: "snapshot", Name: "Database Snapshot (per-source stats)", Type: "snapshot", Checked: true},
-		{Key: "logs", Name: "Desensitized Logs (last 100 lines)", Type: "log", Checked: true},
-		{Key: "stats", Name: "System Statistics", Type: "stats", Checked: true},
-	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
-}
-
 func addDiagnosticItem(w *zip.Writer, name string, data []byte) {
 	if len(data) == 0 {
 		return
@@ -109,7 +105,9 @@ func generateDBSnapshot(svc *services.ReaderService) []byte {
 		ItemCount int64  `json:"itemCount"`
 	}
 	var sources []sourceStat
-	if err := db.Raw("SELECT id, url, COALESCE(fail_count, 0) as fail_count, (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id) as item_count FROM sources s").
+	// 表/列名与 models.go 保持一致（Source/Item、sourceId/fetchFailCount），
+	// 旧写法引用了不存在的 sources/items/source_id/fail_count 导致快照恒为空（M-R2）。
+	if err := db.Raw("SELECT id, url, COALESCE(fetchFailCount, 0) as fail_count, (SELECT COUNT(*) FROM Item i WHERE i.sourceId = s.id) as item_count FROM Source s").
 		Scan(&sources).Error; err != nil {
 		slog.Warn("diagnostic: failed to scan source stats", "error", err)
 	}
@@ -124,16 +122,16 @@ func generateDBSnapshot(svc *services.ReaderService) []byte {
 		Read    int64 `json:"read"`
 		Starred int64 `json:"starred"`
 	}
-	if err := db.Model(&struct{}{}).Table("items").Count(&itemStats.Total).Error; err != nil {
+	if err := db.Model(&models.Item{}).Count(&itemStats.Total).Error; err != nil {
 		slog.Warn("diagnostic: count total failed", "error", err)
 	}
-	if err := db.Model(&struct{}{}).Table("items").Where("is_read = ?", false).Count(&itemStats.Unread).Error; err != nil {
+	if err := db.Model(&models.Item{}).Where("isRead = ?", false).Count(&itemStats.Unread).Error; err != nil {
 		slog.Warn("diagnostic: count unread failed", "error", err)
 	}
-	if err := db.Model(&struct{}{}).Table("items").Where("is_read = ?", true).Count(&itemStats.Read).Error; err != nil {
+	if err := db.Model(&models.Item{}).Where("isRead = ?", true).Count(&itemStats.Read).Error; err != nil {
 		slog.Warn("diagnostic: count read failed", "error", err)
 	}
-	if err := db.Model(&struct{}{}).Table("items").Where("is_starred = ?", true).Count(&itemStats.Starred).Error; err != nil {
+	if err := db.Model(&models.Item{}).Where("isStarred = ?", true).Count(&itemStats.Starred).Error; err != nil {
 		slog.Warn("diagnostic: count starred failed", "error", err)
 	}
 	snapshot["items"] = itemStats
@@ -177,7 +175,7 @@ func generateSystemStats() []byte {
 
 func runtimeInfo() map[string]string {
 	return map[string]string{
-		"go_version": "go1.26",
+		"go_version": runtime.Version(),
 		"os":         strings.ToLower(strings.ReplaceAll(filepath.Ext(os.Args[0]), ".", "")),
 	}
 }
@@ -215,13 +213,6 @@ func (h *ReaderHandler) ExtractDiagnosticPackage(c *gin.Context) {
 	}
 
 	http.ServeFile(c.Writer, c.Request, cleanPath)
-}
-
-// SendDiagnosticFeedback handles diagnostic package submission from users
-func (h *ReaderHandler) SendDiagnosticFeedback(c *gin.Context) {
-	// This would be implemented with a secure upload endpoint
-	// For now, return a placeholder response
-	c.JSON(http.StatusOK, gin.H{"status": "diagnostic_upload_endpoint_ready"})
 }
 
 // GetDiagnoseItems returns the list of diagnostic items for preview

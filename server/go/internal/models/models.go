@@ -42,8 +42,8 @@ type SourceHealth struct {
 	// NextRetryAtUnix 退避期截止时间（Unix 秒），0 表示无退避。
 	// 抓取连续失败时递增，避免僵尸源（超时/503）每次全量刷新都拖慢整体。
 	NextRetryAtUnix int64 `json:"nextRetryAtUnix" gorm:"column:nextRetryAtUnix;default:0"`
-	// NextCheckAtUnix 下次自动抓取截止时间（Unix 秒），0 表示使用固定 interval 计算。
-	// 由 adaptiveNextCheckAt 计算，用于自适应调度：活跃源查得频繁，冷门源查得稀疏。
+	// NextCheckAtUnix 遗留字段（不再写入）：自适应「到期」调度已废弃，
+	// 现改为固定周期全量轮询 + 304 协商（见 scheduler.go）。保留列避免迁移风险。
 	NextCheckAtUnix int64 `json:"nextCheckAtUnix" gorm:"column:nextCheckAtUnix;default:0;index"`
 	// 以下两字段缓存源的上次响应头，用于增量抓取（HTTP 304 协商）
 	FeedLastModified *string `json:"feedLastModified" gorm:"column:feedLastModified"`

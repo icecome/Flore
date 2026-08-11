@@ -41,8 +41,9 @@ type ReaderService struct {
 	// indexChan 接收需建索引/应用规则的 itemID，后台 goroutine 批量处理
 	// 避免每条新文章单独开事务，将 N 次 DB 写操作合并为 1 次批量事务
 	indexChan chan int
-	// indexWG 等待所有待处理 itemID 完成索引/规则应用后退出
-	indexWG sync.WaitGroup
+	// indexOverflow 溢出缓冲：主索引通道满时暂存 itemID，由 indexDrainer 后台回送，
+	// 避免抓取 worker 在索引落盘时被拖累（抓取慢的根因之一）。
+	indexOverflow chan int
 }
 
 // 单例：确保 handler 和 scheduler 共享同一个实例，
@@ -56,13 +57,15 @@ var (
 func NewReaderService() *ReaderService {
 	readerServiceOnce.Do(func() {
 		s := &ReaderService{
-			db:        database.DB,
-			indexChan: make(chan int, 2048),
+			db:           database.DB,
+			indexChan:    make(chan int, 2048),
+			indexOverflow: make(chan int, 8192),
 		}
 		s.proxySettingsSeq = s.loadProxySettingsSeq()
 		// 启动后台批量索引 goroutine，消费 indexChan 中的 itemID
-		s.indexWG.Add(1)
 		go s.indexWorker()
+		// 启动溢出回送 goroutine，将 indexOverflow 中的 itemID 回送主通道，不阻塞抓取
+		go s.indexDrainer()
 		readerServiceInstance = s
 	})
 	return readerServiceInstance
@@ -107,15 +110,8 @@ func (s *ReaderService) Coordinator() *FetchCoordinator {
 	return s.coordinator
 }
 
-// WaitIndexChan 等待后台批量索引 goroutine 处理完所有待处理 itemID。
-// 供 Coordinator.worker 在抓取完成后调用，确保本轮新文章索引和规则应用均已完成。
-func (s *ReaderService) WaitIndexChan() {
-	s.indexWG.Wait()
-}
-
 // GetSources 获取所有订阅源，包含未读数与健康状态
 func (s *ReaderService) indexWorker() {
-	defer s.indexWG.Done()
 	const batchSize = 256
 	batch := make([]int, 0, batchSize)
 	for {
@@ -135,6 +131,14 @@ func (s *ReaderService) indexWorker() {
 			slog.Warn("index batch failed", "count", len(batch), "error", err)
 		}
 		batch = batch[:0]
+	}
+}
+
+// indexDrainer 后台 goroutine：将 indexOverflow 中溢出暂存的 itemID 回送主索引通道。
+// 主通道满时在此 goroutine 内阻塞等待，不影响抓取 worker 的吞吐。
+func (s *ReaderService) indexDrainer() {
+	for id := range s.indexOverflow {
+		s.indexChan <- id
 	}
 }
 

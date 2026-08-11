@@ -41,6 +41,12 @@ func (h *ReaderHandler) MarkReadBatchItems(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": safeError(err.Error())})
 		return
 	}
+	// 限制单次批量上限，防止超大事务长时间持锁（与 DeleteSourcesBatch 口径一致，m-06）
+	const maxBatchSize = 500
+	if len(req.IDs) > maxBatchSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("too many ids, max %d per batch", maxBatchSize)})
+		return
+	}
 
 	if err := h.service.MarkReadBatch(req.IDs, req.Read); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": safeError(err.Error())})

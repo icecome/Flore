@@ -9,6 +9,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -145,7 +146,12 @@ func Start() (*Server, error) {
 	if bindAddr == "" {
 		bindAddr = "127.0.0.1"
 	}
-	port := resolvePort()
+	port, err := resolvePort()
+	if err != nil {
+		slog.Error("invalid PORT configuration", "error", err)
+		_ = logWriter.Close()
+		return nil, err
+	}
 	srv := &http.Server{
 		Addr:              bindAddr + ":" + port,
 		Handler:           r,
@@ -246,15 +252,14 @@ func buildCORSConfig() cors.Config {
 	return config
 }
 
-func resolvePort() string {
+func resolvePort() (string, error) {
 	port := os.Getenv("PORT")
 	if port == "" {
-		return "3002"
+		return "3002", nil
 	}
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum < 0 || portNum > 65535 {
-		slog.Error("invalid PORT, must be a number between 0 and 65535", "port", port)
-		os.Exit(1)
+		return "", fmt.Errorf("invalid PORT %q: must be a number between 0 and 65535", port)
 	}
-	return port
+	return port, nil
 }

@@ -493,42 +493,6 @@ func stripCSPMetaTags(htmlContent string) string {
 	return re.ReplaceAllString(htmlContent, "")
 }
 
-// rewriteCSSUrlsInContent 重写内联 CSS 内容中的 url() 引用为图片代理地址。
-// 使用 CSS 文件本身的 URL 作为 base 解析相对路径，确保 CSS 中的背景图、字体等资源通过代理加载。
-// referer 用于设置图片代理的 Referer 头，绕过 CDN 防盗链。
-// 不同于 rewriteCSSUrls（用于 CSS 代理端点返回的 CSS 内容），此函数用于内联 <style> 中的 CSS。
-func rewriteCSSUrlsInContent(cssContent string, cssURL string, referer string, imageProxyBase string) string {
-	if imageProxyBase == "" {
-		return cssContent
-	}
-
-	urlRe := urlRePre
-	return urlRe.ReplaceAllStringFunc(cssContent, func(match string) string {
-		submatch := urlRe.FindStringSubmatch(match)
-		if len(submatch) < 2 {
-			return match
-		}
-		src := submatch[1]
-		if src == "" || strings.HasPrefix(src, "data:") || strings.HasPrefix(src, "blob:") || strings.Contains(src, "/image-proxy") || strings.Contains(src, "/css-proxy") {
-			return match
-		}
-		// 解析为绝对 URL：使用 CSS 文件本身的 URL 作为 base
-		var absSrc string
-		if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-			absSrc = src
-		} else if strings.HasPrefix(src, "//") {
-			absSrc = "https:" + src
-		} else {
-			absSrc = resolveURLStr(src, cssURL)
-		}
-		if absSrc == "" {
-			return match
-		}
-		proxyURL := fmt.Sprintf("%s?url=%s&ref=%s", imageProxyBase, url.QueryEscape(absSrc), url.QueryEscape(referer))
-		return fmt.Sprintf(`url("%s")`, proxyURL)
-	})
-}
-
 // proxyErrorPage 返回 iframe 内可展示的错误页
 func proxyErrorPage(message, originalURL string) string {
 	safeMessage := html.EscapeString(message)

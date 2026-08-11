@@ -115,7 +115,7 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 	source, err := s.GetSource(sourceID)
 	if err != nil {
 		// GetSource 失败时 source 为 nil，不可解引用其字段（Interval），否则 panic
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, fmt.Sprintf("source not found: %v", err), 0, 0)
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, fmt.Sprintf("source not found: %v", err))
 		return 0, fmt.Errorf("source not found: %w", err)
 	}
 
@@ -133,29 +133,49 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 	if err != nil {
 		if errors.Is(err, ErrNotModified) {
 			// 源未变化（304）：视为可访问，清退避；无新内容不更新 LastSuccessAt 语义
-			s.updateSourceHealth(sourceID, now, now, "", 0, source.Interval)
+			s.updateSourceHealth(sourceID, now, now, "")
 			slog.Info("fetch not modified (304)", "source", source.Name, "url", source.URL)
 			return 0, nil
 		}
 		errMsg := err.Error()
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg, 0, source.Interval)
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg)
 		if fetchDuration > 5*time.Second {
 			slog.Warn("fetch slow (failed)", "source", source.Name, "url", source.URL, "duration", fetchDuration, "error", err)
 		}
 		return 0, fmt.Errorf("failed to fetch feed %s: %w", source.URL, err)
 	}
 
+	// 首次抓取窗口：若该源从未成功抓取过，按 initialFetchWindowDays 设置过滤历史文章，
+	// 避免一次导入灌入几千条历史文章将用户淹没（T-v02-02）。
+	if health.LastSuccessAt.T == nil {
+		if wd := s.GetSettingInt("initialFetchWindowDays", 7); wd > 0 {
+			cutoff := time.Now().AddDate(0, 0, -wd)
+			filtered := make([]FeedItem, 0, len(items))
+			for _, it := range items {
+				if !it.PubDate.IsZero() && it.PubDate.Before(cutoff) {
+					continue
+				}
+				filtered = append(filtered, it)
+			}
+			if len(filtered) < len(items) {
+				slog.Info("initial fetch window applied",
+					"source_id", sourceID, "total", len(items), "kept", len(filtered), "window_days", wd)
+			}
+			items = filtered
+		}
+	}
+
 	upsertStart := time.Now()
 	newCount, err := s.upsertFeedItems(sourceID, items)
 	if err != nil {
 		errMsg := err.Error()
-		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg, 0, source.Interval)
+		s.updateSourceHealth(sourceID, now, models.NullableMilliTime{}, errMsg)
 		return 0, fmt.Errorf("failed to upsert feed items: %w", err)
 	}
 	upsertDuration := time.Since(upsertStart)
 	totalDuration := time.Since(fetchStart)
 
-	s.updateSourceHealth(sourceID, now, now, "", newCount, source.Interval)
+	s.updateSourceHealth(sourceID, now, now, "")
 
 	// 回写条件请求头（Last-Modified / ETag），供下次增量抓取
 	if meta != nil {
@@ -489,16 +509,18 @@ func (s *ReaderService) upsertFeedItems(sourceID int, items []FeedItem) (int, er
 	if len(newItemIDs) > 0 {
 		s.invalidateUnreadCount()
 		// 将新文章 ID 推入批量索引通道，由后台 goroutine 异步处理 FTS5 + 过滤规则
-		// 使用非阻塞发送：通道满时跳过，不影响核心抓取流程
-		// 注意：不可在此 Add(1) —— 无配对 Done 会导致 WaitGroup 计数泄漏，
-		// 且 WaitIndexChan 已无调用方（索引进度由 worker 自身生命周期管理）。
+		// 使用非阻塞发送：通道满时溢出到 indexOverflow，由 indexDrainer 后台回送，
+		// 绝不阻塞抓取 worker 的核心路径（抓取慢的根因之一即索引同步阻塞）。
 		for _, id := range newItemIDs {
 			select {
 			case s.indexChan <- id:
 			default:
-				// 通道满，降级为同步处理，避免阻塞 worker
-				if err := s.indexBatch([]int{id}); err != nil {
-					slog.Warn("index batch failed (fallback)", "item_id", id, "error", err)
+				select {
+				case s.indexOverflow <- id:
+				default:
+					// 双溢出（极罕见）：丢弃该项的搜索索引，文章已入库不受影响，
+					// 仅暂时不可全文搜索，下次重启由索引重建兜底。
+					slog.Warn("index overflow full, item search index dropped", "item_id", id)
 				}
 			}
 		}

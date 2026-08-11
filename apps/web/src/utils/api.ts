@@ -453,14 +453,16 @@ export function getFetchStatus(signal?: AbortSignal): Promise<FetchStatus> {
 
 // ---------------------------------------------------------------- OPML / 数据库
 
-export async function importOPML(xml: string): Promise<void> {
-  await requestOrServerError('/opml/import', {
+export async function importOPML(xml: string): Promise<{ imported: number }> {
+  const res = await requestOrServerError('/opml/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/xml' },
     body: xml,
     timeoutMs: 120000, // 大 OPML 解析较慢
     fallbackError: '导入失败',
   });
+  const payload = (await res.json().catch(() => null)) as { imported?: number } | null;
+  return { imported: payload?.imported ?? 0 };
 }
 
 export function exportOPML(): Promise<void> {

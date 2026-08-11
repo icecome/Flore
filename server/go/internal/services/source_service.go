@@ -142,6 +142,19 @@ type UpdateSourceRequest struct {
 
 // UpdateSource 更新订阅源
 func (s *ReaderService) UpdateSource(id int, req UpdateSourceRequest) error {
+	// URL 变更时做 SSRF 格式校验（与 CreateSource 一致，m-05）。
+	// 仅当 URL 实际变化时校验：避免源域名暂时无法解析时，用户无法编辑名称等其他字段。
+	if req.URL != nil {
+		var current models.Source
+		if err := s.getDb().First(&current, id).Error; err != nil {
+			return err
+		}
+		if *req.URL != current.URL {
+			if err := ValidateURL(*req.URL); err != nil {
+				return fmt.Errorf("invalid url: %w", err)
+			}
+		}
+	}
 	updates := buildUpdateMap(req)
 	if len(updates) == 0 {
 		return fmt.Errorf("no allowed fields to update")
@@ -341,8 +354,11 @@ func (s *ReaderService) cleanupEmptyFolder(tx *gorm.DB, folderID int) error {
 	return nil
 }
 
-// OPML 导入限制常量：防止恶意构造的 OPML 通过深度嵌套或节点爆炸导致栈溢出/内存耗尽
-func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.NullableMilliTime, lastSuccessAt models.NullableMilliTime, lastError string, newCount int, interval int) {
+// updateSourceHealth 更新订阅源健康状态。
+// 成功（lastSuccessAt 非空）时清空失败计数与退避，并记 LastSuccessAt；
+// 失败时递增失败计数，并按指数退避设置 NextRetryAtUnix。
+// 不再维护 NextCheckAtUnix：调度已改为固定周期全量轮询（见 scheduler.go）。
+func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.NullableMilliTime, lastSuccessAt models.NullableMilliTime, lastError string) {
 	var health models.SourceHealth
 	if err := s.getDb().Where("sourceId = ?", sourceID).First(&health).Error; err != nil {
 		// 记录不存在则创建
@@ -355,8 +371,8 @@ func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.Null
 		health.FetchFailCount = 0
 		health.LastError = nil
 		health.NextRetryAtUnix = 0
-		// 自适应调度：根据新增文章数动态计算下次检查时间
-		health.NextCheckAtUnix = s.adaptiveNextCheckAt(interval, newCount)
+		// 不再写入 NextCheckAtUnix：调度改为固定周期全量轮询（见 scheduler.go），
+		// 自适应「到期」逻辑已废弃，避免手动刷新重置调度时钟导致定时抓取漏抓。
 	} else {
 		health.FetchFailCount++
 		if lastError != "" {
@@ -371,29 +387,7 @@ func (s *ReaderService) updateSourceHealth(sourceID int, lastFetchAt models.Null
 	}
 }
 
-// adaptiveNextCheckAt 根据新增文章数计算下次检查时间戳（Unix 秒）。
-// 调度周期统一取全局设置 defaultInterval（UI "默认抓取间隔"），所有订阅源按此周期轮询：
-//   - 新增 >5 条：缩短到最小间隔（fetchMinInterval），尽快拉全
-//   - 否则：按全局间隔轮询（不再无新增即推到 3 天）
-//
-// interval 参数保留以兼容调用链，当前调度不再依赖单源 interval。
-func (s *ReaderService) adaptiveNextCheckAt(interval int, newCount int) int64 {
-	globalInterval := s.GetSettingInt("defaultInterval", 120)
-	if globalInterval < 5 {
-		globalInterval = 5
-	}
-	minInterval := s.GetSettingInt("fetchMinInterval", 20)
-	if minInterval <= 0 {
-		minInterval = 20
-	}
-
-	now := time.Now()
-	if newCount > 5 {
-		nextCheck := now.Add(time.Duration(minInterval) * time.Minute)
-		return nextCheck.Unix()
-	}
-	nextCheck := now.Add(time.Duration(globalInterval) * time.Minute)
-	return nextCheck.Unix()
-}
+// adaptiveNextCheckAt 已废弃：调度改为固定周期全量轮询（见 scheduler.go），
+// 不再根据新增数动态计算下次检查时间。
 
 // CacheStats 缓存统计

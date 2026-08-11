@@ -448,6 +448,13 @@ export default function Sidebar({
           onMarkAllRead,
         }))}
       >
+        {sources.length === 0 ? (
+          <div className="flex h-[120px] flex-col items-center justify-center gap-1 px-4 text-center">
+            <p className="text-[13px] text-muted">还没有订阅源</p>
+            <p className="text-[11px] text-muted/70">点击上方 + 号添加，或在设置中导入 OPML</p>
+          </div>
+        ) : (
+        <>
         {renderFolderTree(folders.filter((f) => f.parentId === null))}
 
         {sortedUncategorized.length > 0 && (
@@ -468,6 +475,7 @@ export default function Sidebar({
             ))}
           </>
         )}
+        </>)}
       </div>
 
       {/* Footer */}
