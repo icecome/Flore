@@ -136,11 +136,22 @@ func resolveBackendBaseURL() string {
 	if port == "" {
 		port = "3002"
 	}
+	// PORT=0（动态端口）时，实际端口由系统分配并写入 FLORE_PORT_FILE（见 backend.Start 的 listener 绑定段）。
+	// 此时回读文件以得到正确端口，避免 baseURL 固化为 "http://127.0.0.1:0" 导致代理 URL 失效（M-P1）。
+	if port == "0" {
+		if portFile := os.Getenv("FLORE_PORT_FILE"); portFile != "" {
+			if raw, err := os.ReadFile(portFile); err == nil {
+				if p := strings.TrimSpace(string(raw)); p != "" {
+					port = p
+				}
+			}
+		}
+	}
 	return "http://" + bindAddr + ":" + port
 }
 
-// authMiddleware 返回一个 Bearer Token 认证中间件；token 为空时返回 nil
-func authMiddleware(token string) gin.HandlerFunc {
+// AuthMiddleware 返回一个 Bearer Token 认证中间件；token 为空时返回 nil
+func AuthMiddleware(token string) gin.HandlerFunc {
 	if token == "" {
 		return nil
 	}
@@ -163,7 +174,7 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 	api := r.Group("/api", rateLimitMiddleware(h.rateLimiter))
 
 	// 敏感路由组（数据库导入/导出、OPML 导入、破坏性写操作），需要 Bearer Token 认证
-	auth := authMiddleware(apiToken)
+	auth := AuthMiddleware(apiToken)
 	sensitive := api
 	if auth != nil {
 		sensitive = api.Group("", auth)
@@ -221,6 +232,15 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		sensitive.DELETE("/filter-rules/:id", h.DeleteFilterRule)
 		api.POST("/filter-rules/:id/test", h.TestFilterRule)
 
+		// 服务端同步（config 含脱敏密钥，读写均入敏感组从严）
+		sensitive.GET("/sync/config", h.GetSyncConfig)
+		sensitive.PUT("/sync/config", h.UpdateSyncConfig)
+		sensitive.POST("/sync/test", h.TestSyncConnection)
+		sensitive.POST("/sync/test-file", h.TestFileSyncConnection)
+		sensitive.POST("/sync/trigger", h.TriggerSync)
+		sensitive.GET("/sync/status", h.GetSyncStatus)
+		sensitive.POST("/sync/align", h.AlignSubscriptions)
+
 		// 原文代理
 		// 预检原文是否可被 iframe 直接嵌入（检查 X-Frame-Options / CSP frame-ancestors），供前端决定直连还是走代理
 		api.GET("/proxy/check/:id", h.CheckFrameable)
@@ -260,7 +280,9 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		sensitive.POST("/backups/restore/import", h.ImportBackupAndValidate)
 
 		// 设置（Settings 表，键值对存储）
-		api.GET("/settings", h.GetSettings)
+		// GET /settings 返回全量键值，含 sync_api_password、proxyUrl 等敏感明文，
+		// 与单 key 读取同样纳入 sensitive 组，避免被未认证同机进程探测
+		sensitive.GET("/settings", h.GetSettings)
 		sensitive.PUT("/settings", h.UpdateSettings)
 		// GetSetting 单 key 读取纳入 sensitive 组：
 		// settings 可能含 proxyUrl 等敏感字段，未认证访问可被探测
@@ -303,12 +325,17 @@ func isAllowedImageContentType(ct string) bool {
 }
 
 // safeError logs the detailed error server-side and returns a safe message.
-// 对于已知业务错误（如 "invalid"、"not found"、"missing"）直接返回；
+// 对于已知业务错误（如 "invalid"、"not found"、"missing"、"not enabled"、"empty"、
+// 认证失败、探活失败等后端主动生成的配置/认证文案）直接返回；
 // 对于未知错误返回通用提示，避免泄露内部路径和实现细节。
 func safeError(detailed string) string {
 	slog.Error(detailed)
 	lower := strings.ToLower(detailed)
-	for _, safe := range []string{"invalid", "not found", "missing", "already exists", "no allowed fields"} {
+	for _, safe := range []string{
+		"invalid", "not found", "missing", "already exists", "no allowed fields",
+		"not enabled", "not configured", "is empty", "authentication",
+		"probe failed", "unreachable", "not supported", "blocked connection",
+	} {
 		if strings.Contains(lower, safe) {
 			return detailed
 		}

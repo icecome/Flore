@@ -35,12 +35,13 @@ import (
 
 // Server 持有一个运行中的后端 HTTP 服务实例，供调用方在退出时优雅关闭。
 type Server struct {
-	srv         *http.Server
-	scheduler   *services.Scheduler
-	coordinator *services.FetchCoordinator
-	logWriter   io.WriteCloser
-	shutdownCh  chan struct{}
-	stopOnce    sync.Once
+	srv           *http.Server
+	scheduler     *services.Scheduler
+	coordinator   *services.FetchCoordinator
+	readerService *services.ReaderService
+	logWriter     io.WriteCloser
+	shutdownCh    chan struct{}
+	stopOnce      sync.Once
 }
 
 // Start 启动后端 HTTP 服务并立即返回已监听的实际端口。
@@ -115,15 +116,14 @@ func Start() (*Server, error) {
 	r.Use(handlers.CSRFProtection())
 
 	apiToken := os.Getenv("FLORE_API_TOKEN")
-	readerHandler := handlers.NewReaderHandler()
-	readerHandler.RegisterRoutes(r, apiToken)
 
 	s := &Server{
 		logWriter:  logWriter,
 		shutdownCh: make(chan struct{}, 1),
 	}
 	// 优雅关闭端点：桌面壳退出时调用，触发后端自身干净关闭。
-	r.POST("/api/shutdown", func(c *gin.Context) {
+	// 认证口径与敏感路由组一致：apiToken 非空时需 Bearer Token（防 Web 版对外部署时被远程 DoS）。
+	r.POST("/api/shutdown", handlers.AuthMiddleware(apiToken), func(c *gin.Context) {
 		select {
 		case s.shutdownCh <- struct{}{}:
 		default:
@@ -138,9 +138,12 @@ func Start() (*Server, error) {
 	coordinator.Start()
 	scheduler := services.NewScheduler(readerService, 5*time.Minute)
 	scheduler.Start()
+	// 同步引擎周期 Pull（订阅对齐 + 增量拉取），随 Stop 一并停止
+	readerService.SyncEngine().StartPeriodicPull()
 
 	s.coordinator = coordinator
 	s.scheduler = scheduler
+	s.readerService = readerService
 
 	bindAddr := os.Getenv("BIND_ADDR")
 	if bindAddr == "" {
@@ -177,6 +180,10 @@ func Start() (*Server, error) {
 			}
 		}
 	}
+	// 在 listener 绑定后、端口文件写入后创建并注册路由处理器：
+	// 使 resolveBackendBaseURL 能读到实际端口（PORT=0 动态端口场景，见 M-P1）。
+	readerHandler := handlers.NewReaderHandler()
+	readerHandler.RegisterRoutes(r, apiToken)
 	s.srv = srv
 
 	go func() {
@@ -203,6 +210,9 @@ func (s *Server) Stop() {
 		}
 		if s.coordinator != nil {
 			s.coordinator.Stop()
+		}
+		if s.readerService != nil {
+			s.readerService.SyncEngine().StopPeriodicPull()
 		}
 		// 停止抓取协调器后再关闭数据库，避免关闭时访问已关闭连接。
 		if sqlDB, err := database.DB.DB(); err == nil {

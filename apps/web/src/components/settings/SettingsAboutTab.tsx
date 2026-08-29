@@ -4,12 +4,18 @@ import { getVersion, checkForUpdate, startUpdate, getCachedUpdate, getUpdateProg
 // 项目仓库地址（开源地址，非敏感配置）
 const REPO_URL = 'https://github.com/icecome/Flore';
 import type { UpdateInfo } from '../../utils/api';
-import { Section, SmallBtn } from './SettingsShared';
+import type { AppSettings } from '../../utils/settings';
+import { Section, SmallBtn, Row, Toggle } from './SettingsShared';
 import { showToast } from '../../utils/toast';
 
 const desktop = isDesktop();
 
-export default function SettingsAboutTab() {
+interface Props {
+  settings: AppSettings;
+  updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+}
+
+export default function SettingsAboutTab({ settings, updateSetting }: Props) {
   const [version, setVersion] = useState('...');
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
@@ -120,6 +126,18 @@ export default function SettingsAboutTab() {
           )}
         </div>
         {checkError && <p className="mt-2 text-[13px] text-danger">{checkError}</p>}
+        {desktop && (
+          <Row
+            title="启动时检查更新"
+            desc="每 3 天最多检查一次，仅在有新版本时于右下角轻提示"
+            control={
+              <Toggle
+                checked={settings.updateCheckOnStartup}
+                onChange={(v) => updateSetting('updateCheckOnStartup', v)}
+              />
+            }
+          />
+        )}
         {update && !updating && !updateError && (
           <div className="mt-3 rounded-md border border-border-subtle p-3">
             <div className="text-[13.5px] font-medium text-primary">

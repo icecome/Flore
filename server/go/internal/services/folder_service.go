@@ -139,9 +139,11 @@ type opmlOutline struct {
 //   - handler 层已通过 http.MaxBytesReader 限制 body 大小为 10MB
 //   - 此处额外限制 outline 节点总数与递归深度，防止深层嵌套导致栈溢出或节点爆炸消耗内存
 func (s *ReaderService) ImportOPML(xmlData string) (int, error) {
-	// 计导入前源数，用于计算导入量
+	// 计导入前源数，用于计算导入量；Count 失败示例已在 db_handlers 层做日志，此处按 0 计
 	var before int64
-	s.getDb().Model(&models.Source{}).Count(&before)
+	if err := s.getDb().Model(&models.Source{}).Count(&before).Error; err != nil {
+		slog.Warn("opml import: count before failed", "error", err)
+	}
 
 	doc, err := s.parseOPMLDocument(xmlData)
 	if err != nil {
@@ -152,7 +154,9 @@ func (s *ReaderService) ImportOPML(xmlData string) (int, error) {
 	}
 
 	var after int64
-	s.getDb().Model(&models.Source{}).Count(&after)
+	if err := s.getDb().Model(&models.Source{}).Count(&after).Error; err != nil {
+		slog.Warn("opml import: count after failed", "error", err)
+	}
 	return int(after - before), nil
 }
 

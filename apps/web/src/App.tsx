@@ -14,6 +14,7 @@ import ShortcutsHelpModal from './components/ShortcutsHelpModal';
 import ExportArticlesModal, { type ExportScope } from './components/ExportArticlesModal';
 import Button from './components/Button';
 import ToastContainer from './components/ToastContainer';
+import UpdateBadge from './components/UpdateBadge';
 import ConfirmDialog from './components/ConfirmDialog';
 import ModalLayout from './components/ModalLayout';
 import type { Item, Source, Folder } from './types';
@@ -39,11 +40,18 @@ import {
   deleteFolder,
   clearFolderSources,
   importOPML,
+  listSources,
+  isDesktop,
+  checkForUpdate,
+  type UpdateInfo,
 } from './utils/api';
 import { useSourcesData } from './hooks/useSourcesData';
 import { useItemsData, type ItemFilter } from './hooks/useItemsData';
 import { useNotification } from './hooks/useNotification';
 import { useFetchOrchestration } from './hooks/useFetchOrchestration';
+
+// 启动检查更新节流间隔：每 3 天最多一次
+const UPDATE_CHECK_INTERVAL_MS = 3 * 24 * 60 * 60 * 1000;
 
 function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -61,18 +69,37 @@ function App() {
 
   // 启动后从后端加载设置，并执行一次性 localStorage 迁移
   // 失败时静默，保留 localStorage 中的配置继续使用
+  const [serverSettingsLoaded, setServerSettingsLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       await migrateLegacySettingsIfNeeded();
       const serverSettings = await loadSettingsFromServer();
-      if (cancelled || !serverSettings) return;
-      // 后端有配置时合并到 state，覆盖本地默认值
-      setSettings(serverSettings);
-      saveSettings(serverSettings);
+      if (cancelled) return;
+      if (serverSettings) {
+        // 后端有配置时合并到 state，覆盖本地默认值
+        setSettings(serverSettings);
+        saveSettings(serverSettings);
+      }
+      setServerSettingsLoaded(true);
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // 启动时静默检查更新（T-v03-02）：桌面端 + 开关开启 + 距上次检查超过 3 天
+  // 有新版本时通过角落轻提示告知，不弹窗打断阅读
+  const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
+  const startupUpdateCheckDoneRef = useRef(false);
+  useEffect(() => {
+    if (!serverSettingsLoaded || startupUpdateCheckDoneRef.current) return;
+    startupUpdateCheckDoneRef.current = true;
+    if (!isDesktop() || !settings.updateCheckOnStartup) return;
+    if (Date.now() - settings.lastUpdateCheckAt < UPDATE_CHECK_INTERVAL_MS) return;
+    handleSettingsChange({ ...settings, lastUpdateCheckAt: Date.now() });
+    checkForUpdate()
+      .then((info) => { if (info) setAvailableUpdate(info); })
+      .catch((err) => console.error('Startup update check failed:', err));
+  }, [serverSettingsLoaded, settings, handleSettingsChange]);
 
   const [selectedSourceId, setSelectedSourceId] = useState<number | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
@@ -150,10 +177,10 @@ function App() {
   }, [selectedSourceId, selectedFolderId]);
 
   const {
-    items, totalCount, readLaterCount, loadingItems,
+    items, totalCount, readLaterCount, starredCount, loadingItems,
     searchKeyword, isSearchMode,
     setSearchKeyword, setIsSearchMode, setItems,
-    fetchItems, loadMore, hasMore, loadingMore, fetchItemCount, fetchReadLaterCount, fetchSearchItems,
+    fetchItems, loadMore, hasMore, loadingMore, fetchItemCount, fetchReadLaterCount, fetchStarredCount, fetchSearchItems,
   } = useItemsData({
     selectedSourceId, selectedFolderId, filter, settings,
     fetchUnreadCount, abortRef, setSelectedItem,
@@ -269,7 +296,9 @@ function App() {
     }
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isStarred: starred } : i)));
     setSelectedItem((prev) => (prev && prev.id === id ? { ...prev, isStarred: starred } : prev));
-  }, [setItems]);
+    // 收藏/取消收藏后立即刷新收藏计数
+    await fetchStarredCount();
+  }, [setItems, fetchStarredCount]);
 
   // 切换稍后阅读
   const handleToggleReadLater = useCallback(async (id: number, readLater: boolean) => {
@@ -282,7 +311,9 @@ function App() {
     }
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isReadLater: readLater } : i)));
     setSelectedItem((prev) => (prev && prev.id === id ? { ...prev, isReadLater: readLater } : prev));
-  }, [setItems]);
+    // 添加/取消稍后阅读后立即刷新稍后阅读计数
+    await fetchReadLaterCount();
+  }, [setItems, fetchReadLaterCount]);
 
   // 切换已读（阅读区按钮）；items 从 ref 读取，保证回调引用稳定。
   // 避免渲染期写 ref（React 并发渲染下不纯）：改为 effect 中同步最新值。
@@ -425,12 +456,14 @@ function App() {
   const fetchItemCountRef = useRef(fetchItemCount);
   const fetchUnreadCountRef = useRef(fetchUnreadCount);
   const fetchReadLaterCountRef = useRef(fetchReadLaterCount);
+  const fetchStarredCountRef = useRef(fetchStarredCount);
   useEffect(() => { fetchItemsRef.current = fetchItems; }, [fetchItems]);
   useEffect(() => { fetchSourcesRef.current = fetchSources; }, [fetchSources]);
   useEffect(() => { fetchFoldersRef.current = fetchFolders; }, [fetchFolders]);
   useEffect(() => { fetchItemCountRef.current = fetchItemCount; }, [fetchItemCount]);
   useEffect(() => { fetchUnreadCountRef.current = fetchUnreadCount; }, [fetchUnreadCount]);
   useEffect(() => { fetchReadLaterCountRef.current = fetchReadLaterCount; }, [fetchReadLaterCount]);
+  useEffect(() => { fetchStarredCountRef.current = fetchStarredCount; }, [fetchStarredCount]);
 
   const refreshAllData = useCallback(async () => {
     await Promise.all([
@@ -442,6 +475,7 @@ function App() {
       fetchItemCountRef.current(),
       fetchUnreadCountRef.current(),
       fetchReadLaterCountRef.current(),
+      fetchStarredCountRef.current(),
     ]);
   }, []);
 
@@ -698,10 +732,17 @@ function App() {
     });
   }, []);
 
+  // 导入上下文：记录导入前源 ID 集合与导入数，供首轮抓取完成后生成死链汇总提示
+  const importReportRef = useRef<{ knownIds: Set<number>; importedCount: number } | null>(null);
+
   // 导入 OPML（错误向上抛给 ImportOPMLModal 展示）
   const handleImportOPML = useCallback(async (xml: string) => {
     let imported = 0;
+    let knownIds = new Set<number>();
     try {
+      // 记录导入前已有源 ID，用于抓取完成后区分新导入源
+      const before = await listSources();
+      knownIds = new Set(before.map((s) => s.id));
       const res = await importOPML(xml);
       imported = res.imported ?? 0;
     } catch (err: unknown) {
@@ -715,8 +756,37 @@ function App() {
     await Promise.all([fetchFoldersRef.current(), fetchSourcesRef.current()]);
     if (imported > 0) {
       showToast('已导入 ' + imported + ' 个订阅源，正在抓取最新文章…');
+      // 记录导入上下文，首轮抓取完成后输出死链汇总提示
+      importReportRef.current = { knownIds, importedCount: imported };
+      await handleFetch({});
     }
   }, []);
+
+  // 导入后的首轮抓取完成：统计新导入源中的死链并给出汇总提示
+  const prevRefreshingRef = useRef(false);
+  useEffect(() => {
+    const wasRefreshing = prevRefreshingRef.current;
+    prevRefreshingRef.current = refreshing;
+    const report = importReportRef.current;
+    if (!wasRefreshing || refreshing || !report) return;
+    importReportRef.current = null;
+    (async () => {
+      try {
+        const fresh = await listSources();
+        const failed = fresh.filter(
+          (s) => !report.knownIds.has(s.id) && (s.lastError !== null || s.fetchFailCount > 0),
+        ).length;
+        showToast(
+          failed > 0
+            ? `已添加 ${report.importedCount} 个源，${failed} 个暂时无法连接`
+            : `已添加 ${report.importedCount} 个源`,
+        );
+      } catch (err) {
+        console.error('Failed to build import report:', err);
+        showToast(`已添加 ${report.importedCount} 个源`);
+      }
+    })();
+  }, [refreshing]);
 
   // 导出 OPML
   const handleExportOPML = useCallback(async () => {
@@ -770,12 +840,16 @@ function App() {
           filter={filter}
           onSelectSource={(id) => {
             setSelectedSourceId(id);
+            // 切入源视图统一为未读视图，保证未读时间分层栏始终显示且行为一致
+            setFilter('unread');
             setIsSearchMode(false);
             setSearchKeyword('');
             setShowMobileSidebar(false);
           }}
           onSelectFolder={(id) => {
             setSelectedFolderId(id);
+            // 切入文件夹视图统一为未读视图，保证未读时间分层栏始终显示且行为一致
+            setFilter('unread');
             setIsSearchMode(false);
             setSearchKeyword('');
             setShowMobileSidebar(false);
@@ -844,6 +918,8 @@ function App() {
             filter={filter}
             totalCount={totalCount}
             globalUnreadCount={unreadCountInScope}
+            readLaterCount={readLaterCount}
+            starredCount={starredCount}
             settings={settings}
             searchKeyword={searchKeyword}
             isSearchMode={isSearchMode}
@@ -983,6 +1059,9 @@ function App() {
         </ModalLayout>
       )}
       </div>
+      {availableUpdate && (
+        <UpdateBadge update={availableUpdate} onDismiss={() => setAvailableUpdate(null)} />
+      )}
       <ToastContainer />
     </div>
   );

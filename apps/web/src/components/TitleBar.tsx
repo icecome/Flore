@@ -149,7 +149,10 @@ function useWindowState() {
   useEffect(() => {
     const app = getDesktopApp();
     if (app && app.SaveWindowState) {
-      app.SaveWindowState(maximized);
+      // floating promise 必须 catch，避免 Wails 桥调用失败时成 unhandled rejection（n-09）
+      app.SaveWindowState(maximized).catch((err: unknown) => {
+        console.warn('SaveWindowState failed', err);
+      });
     }
   }, [maximized]);
 

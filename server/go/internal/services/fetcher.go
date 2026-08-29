@@ -208,7 +208,7 @@ func (s *ReaderService) FetchSourceFeed(sourceID int) (int, error) {
 // - fetchTimeout: 抓取超时（秒），默认 15
 // - proxyEnabled + proxyUrl: HTTP 代理
 // 启用代理时使用普通 Transport，因为 SSRF 防护的 DialContext 会阻止连接到本地代理
-// 内部缓存客户端实例，代理设置变更时自动重建
+// 内部缓存客户端实例，代理设置或 fetchTimeout 变更时自动重建
 func (s *ReaderService) BuildFetchHTTPClient() *http.Client {
 	timeoutSec := s.GetSettingInt("fetchTimeout", 15)
 	if timeoutSec <= 0 {
@@ -216,9 +216,12 @@ func (s *ReaderService) BuildFetchHTTPClient() *http.Client {
 	}
 
 	currentSeq := atomic.LoadInt64(&s.proxySettingsSeq)
+	// 期望超时（秒）：命中缓存须同时满足代理 seq 未变且超时未变（m-03），
+	// 否则 fetchTimeout 改动后旧客户端持续生效直至代理变更或重启。
+	wantTimeout := time.Duration(timeoutSec) * time.Second
 
 	s.cachedHTTPClientMu.RLock()
-	if s.cachedHTTPClient != nil && s.cachedHTTPClientSeq == currentSeq {
+	if s.cachedHTTPClient != nil && s.cachedHTTPClientSeq == currentSeq && s.cachedHTTPClient.Timeout == wantTimeout {
 		client := s.cachedHTTPClient
 		s.cachedHTTPClientMu.RUnlock()
 		return client
@@ -229,7 +232,7 @@ func (s *ReaderService) BuildFetchHTTPClient() *http.Client {
 	defer s.cachedHTTPClientMu.Unlock()
 
 	// 双重检查
-	if s.cachedHTTPClient != nil && s.cachedHTTPClientSeq == currentSeq {
+	if s.cachedHTTPClient != nil && s.cachedHTTPClientSeq == currentSeq && s.cachedHTTPClient.Timeout == wantTimeout {
 		return s.cachedHTTPClient
 	}
 

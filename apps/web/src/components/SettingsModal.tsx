@@ -14,6 +14,7 @@ import {
   Bell,
   Globe,
   Keyboard,
+  RefreshCw,
 } from './icons';
 import { cn } from '../lib/cn';
 import {
@@ -55,9 +56,10 @@ import SettingsAboutTab from './settings/SettingsAboutTab';
 import SettingsDataTab from './settings/SettingsDataTab';
 import SettingsNotifyTab from './settings/SettingsNotifyTab';
 import SettingsNetworkTab from './settings/SettingsNetworkTab';
+import SettingsSyncTab from './settings/SettingsSyncTab';
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab';
 
-type TabId = 'general' | 'appearance' | 'sources' | 'rules' | 'data' | 'notify' | 'network' | 'shortcuts' | 'about';
+export type TabId = 'general' | 'appearance' | 'sources' | 'rules' | 'data' | 'notify' | 'network' | 'sync' | 'shortcuts' | 'about';
 type Theme = 'light' | 'dark' | 'system';
 
 interface Props {
@@ -68,6 +70,8 @@ interface Props {
   onAddSource?: () => void;
   sources: Source[];
   folders: Folder[];
+  /** 打开时定位到的 Tab（同步指示器跳转用） */
+  initialTab?: TabId;
 }
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
@@ -78,6 +82,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'data', label: '数据管理', icon: <Database size={17} /> },
   { id: 'notify', label: '通知与驻留', icon: <Bell size={17} /> },
   { id: 'network', label: '网络设置', icon: <Globe size={17} /> },
+  { id: 'sync', label: '同步', icon: <RefreshCw size={17} /> },
   { id: 'shortcuts', label: '快捷键', icon: <Keyboard size={17} /> },
   { id: 'about', label: '关于', icon: <Info size={17} /> },
 ];
@@ -112,8 +117,8 @@ const OPEN_MODE_OPTIONS: { value: AppSettings['openArticleMode']; label: string 
   { value: 'browser', label: '浏览器打开' },
 ];
 
-export default function SettingsModal({ settings, onSettingsChange, onClose, onSourcesChanged, onAddSource, sources, folders }: Props) {
-  const [activeTab, setActiveTab] = useState<TabId>('general');
+export default function SettingsModal({ settings, onSettingsChange, onClose, onSourcesChanged, onAddSource, sources, folders, initialTab }: Props) {
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'general');
   const [theme, setTheme] = useState<Theme>(() => {
     // 用 AppSettings.appTheme 初始化，避免弹窗内状态与全局不一致
     return (settings.appTheme === 'light' || settings.appTheme === 'dark') ? settings.appTheme : 'system';
@@ -365,6 +370,19 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     );
     await Promise.all(workers);
     await refreshSourcesAfterCheck();
+  };
+
+  // 坏源「立即重试」（T-v03-04）：手动提交不经调度退避，立即抓取一次
+  const retrySource = async (sourceId: number) => {
+    try {
+      await triggerFetch({ sourceId });
+      showToast('已提交重试，稍后自动刷新状态');
+      // 抓取为后台异步执行，延迟刷新以呈现最新健康状态
+      setTimeout(() => { onSourcesChanged?.(); }, 3000);
+    } catch (err) {
+      console.error('Failed to retry source:', err);
+      showToast('重试失败');
+    }
   };
 
   const importOPML = async (fileOrXml: File | string) => {
@@ -882,6 +900,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
             onMoveSelectedToFolder={moveSelectedSourcesToFolder}
             onEditSource={(s) => setEditTarget(s)}
             onCheckAvailability={checkAvailability}
+            onRetrySource={retrySource}
             onImportOPML={importOPML}
             onExportOPML={exportOPML}
             onSourceFilterChange={(v) => { setSourceFilter(v); setSelectedSourceIds([]); }}
@@ -925,11 +944,15 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
           <SettingsNetworkTab settings={settings} updateSetting={updateSetting} />
         );
 
+      case 'sync':
+        // 同步会新增源/文章，完成后回调 onSourcesChanged 刷新 App 全局数据
+        return <SettingsSyncTab onSourcesChanged={onSourcesChanged} />;
+
       case 'shortcuts':
         return <SettingsShortcutsTab />;
 
       case 'about':
-        return <SettingsAboutTab />;
+        return <SettingsAboutTab settings={settings} updateSetting={updateSetting} />;
 
       default:
         return null;

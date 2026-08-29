@@ -23,6 +23,7 @@ interface Props {
   onHideSource: (source: Source) => void;
   onEditSource: (source: Source) => void;
   onCheckAvailability: () => Promise<void>;
+  onRetrySource?: (sourceId: number) => void;
   onImportOPML: (fileOrXml: File | string) => Promise<void>;
   onExportOPML: () => Promise<void>;
   onSourceFilterChange: (filter: 'all' | 'ok' | 'bad') => void;
@@ -52,6 +53,7 @@ export default function SettingsSourcesTab(props: Props) {
     onHideSource,
     onEditSource,
     onCheckAvailability,
+    onRetrySource,
     onImportOPML,
     onExportOPML,
     onSourceFilterChange,
@@ -226,6 +228,13 @@ export default function SettingsSourcesTab(props: Props) {
                     )}
                   </div>
                   <div className="col-span-2 flex items-center justify-end gap-1">
+                    {bad && onRetrySource && (
+                      <IconBtn
+                        icon={<RefreshCw size={15} />}
+                        title="立即重试"
+                        onClick={() => onRetrySource(source.id)}
+                      />
+                    )}
                     <IconBtn icon={<Pencil size={15} />} title="编辑" onClick={() => onEditSource(source)} />
                     <IconBtn
                       icon={<EyeOff size={15} />}

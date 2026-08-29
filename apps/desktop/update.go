@@ -77,20 +77,6 @@ func (a *App) GetUpdateProgress() float64 {
 	return math.Float64frombits(a.updateProgress.Load())
 }
 
-// backgroundCheckUpdate 在应用启动后于后台静默检查更新，结果写入缓存，
-// 使设置面板无需手动点击即可展示可用更新（解决“关闭设置后更新状态丢失”）。
-func (a *App) backgroundCheckUpdate() {
-	info, err := updater.CheckForUpdate(version)
-	if err != nil {
-		a.logger.Printf("[update] 后台检查更新失败: %v", err)
-		return
-	}
-	a.updateMu.Lock()
-	a.cachedUpdate = info
-	a.updateMu.Unlock()
-	a.logger.Printf("[update] 后台检查更新完成: hasUpdate=%v", info != nil)
-}
-
 const updateMarkerName = "updated.flag"
 
 // writeUpdateMarker 写入"已更新"标记，供重启后的实例提示用户。

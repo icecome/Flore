@@ -31,10 +31,14 @@ async function downloadItemMarkdown(itemId: number): Promise<void> {
       types: [{ description: 'Markdown 文件', accept: { 'text/markdown': ['.md'] } }],
     });
     const writable = await handle.createWritable();
-    const response = await fetch(getItemMarkdownUrl(itemId));
-    const content = await response.text();
-    await writable.write(content);
-    await writable.close();
+    try {
+      const response = await fetch(getItemMarkdownUrl(itemId));
+      const content = await response.text();
+      await writable.write(content);
+    } finally {
+      // 无论 fetch/write 是否抛错都关闭句柄，避免文件被占用（m-15）
+      await writable.close();
+    }
     showToast('Markdown 已保存');
     return;
   } catch (err) {

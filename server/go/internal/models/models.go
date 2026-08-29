@@ -11,17 +11,21 @@ type Folder struct {
 
 // Source 对应 Prisma 的 Source 表
 type Source struct {
-	ID             int       `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name           string    `json:"name" gorm:"not null"`
-	URL            string    `json:"url" gorm:"not null"`
-	FolderID       *int      `json:"folderId" gorm:"column:folderId;index"`
-	ListRule       string    `json:"listRule" gorm:"column:listRule;not null"`
-	Interval       int       `json:"interval" gorm:"default:120"`
-	Active         bool      `json:"active" gorm:"default:true"`
-	IsPrivate      bool      `json:"isPrivate" gorm:"column:isPrivate;default:false;index"`
-	HideInTimeline bool      `json:"hideInTimeline" gorm:"column:hideInTimeline;default:false;index"`
-	CreatedAtTime  MilliTime `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
-	UpdatedAtTime  MilliTime `json:"updatedAt" gorm:"column:updatedAt;autoUpdateTime;autoCreateTime"`
+	ID             int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name           string `json:"name" gorm:"not null"`
+	URL            string `json:"url" gorm:"not null"`
+	FolderID       *int   `json:"folderId" gorm:"column:folderId;index"`
+	ListRule       string `json:"listRule" gorm:"column:listRule;not null"`
+	Interval       int    `json:"interval" gorm:"default:120"`
+	Active         bool   `json:"active" gorm:"default:true"`
+	IsPrivate      bool   `json:"isPrivate" gorm:"column:isPrivate;default:false;index"`
+	HideInTimeline bool   `json:"hideInTimeline" gorm:"column:hideInTimeline;default:false;index"`
+	// RemoteOrigin 非空表示该源来自远端同步服务端（如 miniflux），本地调度不再抓取，由 Sync Engine 接管
+	RemoteOrigin string `json:"remoteOrigin" gorm:"column:remoteOrigin;default:'';index"`
+	// RemoteID 远端服务的 feed 标识（Miniflux feed_id / GReader streamID）
+	RemoteID      string    `json:"remoteId" gorm:"column:remoteId;default:''"`
+	CreatedAtTime MilliTime `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
+	UpdatedAtTime MilliTime `json:"updatedAt" gorm:"column:updatedAt;autoUpdateTime;autoCreateTime"`
 
 	// 前端展示用，非数据库字段
 	UnreadCount    int64             `json:"unreadCount" gorm:"-"`
@@ -52,17 +56,19 @@ type SourceHealth struct {
 
 // Item 对应 Prisma 的 Item 表
 type Item struct {
-	ID            int               `json:"id" gorm:"primaryKey;autoIncrement"`
-	SourceID      int               `json:"sourceId" gorm:"column:sourceId;not null;index;uniqueIndex:idx_items_link_source,priority:1"`
-	Title         string            `json:"title" gorm:"not null"`
-	Link          string            `json:"link" gorm:"not null;uniqueIndex:idx_items_link_source,priority:2"`
-	Desc          *string           `json:"desc"`
-	Author        *string           `json:"author"`
-	PubDate       NullableMilliTime `json:"pubDate" gorm:"column:pubDate"`
-	IsRead        bool              `json:"isRead" gorm:"column:isRead;default:false;index"`
-	IsStarred     bool              `json:"isStarred" gorm:"column:isStarred;default:false;index"`
-	IsReadLater   bool              `json:"isReadLater" gorm:"column:isReadLater;default:false;index"`
-	CreatedAtTime MilliTime         `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
+	ID          int               `json:"id" gorm:"primaryKey;autoIncrement"`
+	SourceID    int               `json:"sourceId" gorm:"column:sourceId;not null;index;uniqueIndex:idx_items_link_source,priority:1"`
+	Title       string            `json:"title" gorm:"not null"`
+	Link        string            `json:"link" gorm:"not null;uniqueIndex:idx_items_link_source,priority:2"`
+	Desc        *string           `json:"desc"`
+	Author      *string           `json:"author"`
+	PubDate     NullableMilliTime `json:"pubDate" gorm:"column:pubDate"`
+	IsRead      bool              `json:"isRead" gorm:"column:isRead;default:false;index"`
+	IsStarred   bool              `json:"isStarred" gorm:"column:isStarred;default:false;index"`
+	IsReadLater bool              `json:"isReadLater" gorm:"column:isReadLater;default:false;index"`
+	// RemoteID 远端条目标识（Miniflux entry_id / GReader tag），同步状态回推时映射
+	RemoteID      string    `json:"remoteId" gorm:"column:remoteId;default:'';index"`
+	CreatedAtTime MilliTime `json:"createdAt" gorm:"column:createdAt;autoCreateTime"`
 
 	Source *Source `json:"source,omitempty" gorm:"foreignKey:SourceID;references:ID;constraint:OnDelete:CASCADE"`
 }

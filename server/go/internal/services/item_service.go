@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rss/go-server/internal/models"
+	rsssync "github.com/rss/go-server/internal/sync"
 	"gorm.io/gorm"
 )
 
@@ -98,6 +99,13 @@ func (s *ReaderService) MarkRead(id int, read bool) error {
 		return err
 	}
 	s.invalidateUnreadCount()
+	if s.syncEngine != nil {
+		kind := rsssync.StateChangeRead
+		if !read {
+			kind = rsssync.StateChangeUnread
+		}
+		s.syncEngine.RecordStateChange(id, kind)
+	}
 	return nil
 }
 
@@ -110,6 +118,15 @@ func (s *ReaderService) MarkReadBatch(ids []int, read bool) error {
 		return err
 	}
 	s.invalidateUnreadCount()
+	if s.syncEngine != nil {
+		kind := rsssync.StateChangeRead
+		if !read {
+			kind = rsssync.StateChangeUnread
+		}
+		for _, id := range ids {
+			s.syncEngine.RecordStateChange(id, kind)
+		}
+	}
 	return nil
 }
 
@@ -148,7 +165,17 @@ func (s *ReaderService) deleteChildFolders(tx *gorm.DB, folderID int) error {
 
 // MarkStarred 标记收藏
 func (s *ReaderService) MarkStarred(id int, starred bool) error {
-	return s.getDb().Model(&models.Item{}).Where("id = ?", id).Update("isStarred", starred).Error
+	if err := s.getDb().Model(&models.Item{}).Where("id = ?", id).Update("isStarred", starred).Error; err != nil {
+		return err
+	}
+	if s.syncEngine != nil {
+		kind := rsssync.StateChangeStar
+		if !starred {
+			kind = rsssync.StateChangeUnstar
+		}
+		s.syncEngine.RecordStateChange(id, kind)
+	}
+	return nil
 }
 
 // MarkReadLater 标记稍后阅读
@@ -474,16 +501,15 @@ func isValidByline(byline string) bool {
 	if len(byline) < 2 {
 		return false
 	}
-	// 纯数字或编号类文本不是有效作者
-	matched, err := regexp.MatchString(`^\d+$`, byline)
-	if err != nil {
-		return false
-	}
-	if matched {
+	// 纯数字或编号类文本不是有效作者（正则预编译，避免每次调用重新编译，见 n-02）
+	if digitsOnlyByline.MatchString(byline) {
 		return false
 	}
 	return true
 }
+
+// digitsOnlyByline 匹配纯数字作者名的预编译正则
+var digitsOnlyByline = regexp.MustCompile(`^\d+$`)
 
 // GetOriginalURL 根据文章 ID 获取原文链接（用于代理）
 func (s *ReaderService) GetOriginalURL(id int) (string, error) {

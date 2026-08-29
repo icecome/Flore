@@ -12,21 +12,6 @@ interface Props {
   autoFocus?: boolean;
 }
 
-function createSubmitHandler({
-  onSearch,
-  onClear,
-}: {
-  onSearch: (keyword: string) => void;
-  onClear: () => void;
-}) {
-  return (e: React.FormEvent) => {
-    e.preventDefault();
-    const keyword = (e.currentTarget as HTMLFormElement).querySelector('input')?.value?.trim() ?? '';
-    if (keyword) onSearch(keyword);
-    else onClear();
-  };
-}
-
 export default function SearchBox({ query, onSearch, onClear, placeholder = '搜索文章...', autoFocus = false }: Props) {
   const [input, setInput] = useState(query);
   const inputRef = useRef<HTMLInputElement>(null);

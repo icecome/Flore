@@ -23,15 +23,25 @@ type ReaderService struct {
 	unreadCountMu    sync.RWMutex
 	unreadCountReady bool
 
-	// cachedHTTPClient 缓存的 HTTP 客户端，在代理设置变更时重建
+	// cachedHTTPClient 缓存的 HTTP 客户端，在代理设置或 fetchTimeout 变更时重建
 	cachedHTTPClient    *http.Client
 	cachedHTTPClientMu  sync.RWMutex
 	cachedHTTPClientSeq int64
 	proxySettingsSeq    int64
 
+	// settingsCache 缓存全部设置项，避免高频路径（scheduler tick / BuildFetchHTTPClient）
+	// 每次 `key = ?` 查 DB。UpdateSettings 与数据库恢复后递增 seq 使缓存失效（m-13）。
+	settingsCache     map[string]string
+	settingsCacheMu   sync.RWMutex
+	settingsCacheSeq  int64
+	settingsCacheLoad int64
+
 	// coordinator 是抓取动作的唯一调度权威，由 main 启动时注入。
 	// 所有抓取入口（手动/调度/托盘）统一走 coordinator.Submit，去重与并发控制集中在此。
 	coordinator *FetchCoordinator
+
+	// syncEngine 远端同步引擎（订阅对齐/增量拉取/状态回推）
+	syncEngine *SyncEngine
 
 	// filterRulesCache 缓存过滤规则，避免每篇新文章都查一次 DB
 	filterRulesCache    []FilterRuleWithConditions
@@ -57,11 +67,12 @@ var (
 func NewReaderService() *ReaderService {
 	readerServiceOnce.Do(func() {
 		s := &ReaderService{
-			db:           database.DB,
-			indexChan:    make(chan int, 2048),
+			db:            database.DB,
+			indexChan:     make(chan int, 2048),
 			indexOverflow: make(chan int, 8192),
 		}
 		s.proxySettingsSeq = s.loadProxySettingsSeq()
+		s.syncEngine = NewSyncEngine(s)
 		// 启动后台批量索引 goroutine，消费 indexChan 中的 itemID
 		go s.indexWorker()
 		// 启动溢出回送 goroutine，将 indexOverflow 中的 itemID 回送主通道，不阻塞抓取
@@ -108,6 +119,11 @@ func (s *ReaderService) SetCoordinator(c *FetchCoordinator) {
 // Coordinator 返回抓取协调器，供 handler/scheduler 调用 Submit。
 func (s *ReaderService) Coordinator() *FetchCoordinator {
 	return s.coordinator
+}
+
+// SyncEngine 返回远端同步引擎（构造时创建，单例）
+func (s *ReaderService) SyncEngine() *SyncEngine {
+	return s.syncEngine
 }
 
 // GetSources 获取所有订阅源，包含未读数与健康状态

@@ -3,12 +3,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Folder, Source } from '../types';
 import { cn } from '../lib/cn';
 import ContextMenu, { type ContextMenuItem } from './ContextMenu';
-import SettingsModal from './SettingsModal';
+import SettingsModal, { type TabId } from './SettingsModal';
 import SearchBox from './SearchBox';
 import type { AppSettings } from '../utils/settings';
 import SourceAvatar from './SourceAvatar';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { usePlatform } from '../hooks/usePlatform';
+import { useSyncStatus } from '../hooks/useSyncStatus';
 import {
   buildSidebarSourceMenu,
   buildSidebarFolderMenu,
@@ -24,8 +25,10 @@ import {
   Inbox,
   Folder as FolderIcon,
   AlertTriangle,
+  Circle,
   FolderOpenIcon,
   Search,
+  RefreshCw,
 } from './icons';
 
 interface Props {
@@ -165,6 +168,8 @@ export default function Sidebar({
   }, [expandedFolders]);
 
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<TabId | null>(null);
+  const syncStatus = useSyncStatus();
   const { menuProps, showMenu } = useContextMenu();
 
   const uncategorized = useMemo(
@@ -199,27 +204,39 @@ export default function Sidebar({
     };
   }, [visibleSources, folders]);
 
-  const folderSources = (folderId: number) => folderSourcesMap.get(folderId) || [];
-  const folderChildren = (folderId: number) => folderChildrenMap.get(folderId) || [];
-  const folderUnread = (folderId: number) => folderUnreadMap.get(folderId) || 0;
+  const folderSources = useCallback((folderId: number) => folderSourcesMap.get(folderId) || [], [folderSourcesMap]);
+  const folderChildren = useCallback((folderId: number) => folderChildrenMap.get(folderId) || [], [folderChildrenMap]);
+  const folderUnread = useCallback((folderId: number) => folderUnreadMap.get(folderId) || 0, [folderUnreadMap]);
 
-  const isUnhealthySource = (s: { fetchFailCount?: number; lastError?: string | null }): boolean => {
-    return (s.fetchFailCount || 0) >= 3 || s.lastError != null;
-  };
+  const isUnhealthySource = useCallback(
+    (s: { fetchFailCount?: number; lastError?: string | null }): boolean => {
+      return (s.fetchFailCount || 0) >= 3 || s.lastError != null;
+    },
+    []
+  );
 
-  const sortByUnreadDescThenName = <T extends { name: string; unreadCount?: number }>(
-    items: T[],
-    isUnhealthy?: (item: T) => boolean
-  ): T[] => {
-    const compareFn = (a: T, b: T) => {
-      const unreadDiff = (b.unreadCount || 0) - (a.unreadCount || 0);
-      if (unreadDiff !== 0) return unreadDiff;
-      const nameCmp = a.name.localeCompare(b.name, 'zh-CN');
-      if (nameCmp !== 0) return nameCmp;
-      return compareByHealth(a, b, isUnhealthy);
-    };
-    return [...items].sort(compareFn);
-  };
+  // 仅当存在异常源时显示「N 个源异常」提示，全部健康时隐藏
+  const abnormalCount = useMemo(
+    () => visibleSources.filter((s) => sourceHealthState(s) !== 'ok').length,
+    [visibleSources]
+  );
+
+  const sortByUnreadDescThenName = useCallback(
+    <T extends { name: string; unreadCount?: number }>(
+      items: T[],
+      isUnhealthy?: (item: T) => boolean
+    ): T[] => {
+      const compareFn = (a: T, b: T) => {
+        const unreadDiff = (b.unreadCount || 0) - (a.unreadCount || 0);
+        if (unreadDiff !== 0) return unreadDiff;
+        const nameCmp = a.name.localeCompare(b.name, 'zh-CN');
+        if (nameCmp !== 0) return nameCmp;
+        return compareByHealth(a, b, isUnhealthy);
+      };
+      return [...items].sort(compareFn);
+    },
+    []
+  );
 
   // 文件夹本身没有 unreadCount 字段，需要从 folderUnreadMap 查未读数再排序
   const sortFoldersByUnreadDescThenName = useCallback(
@@ -248,17 +265,25 @@ export default function Sidebar({
     [uncategorized]
   );
 
-  const toggleFolder = (folderId: number) => {
+  const toggleFolder = useCallback((folderId: number) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(folderId)) next.delete(folderId);
       else next.add(folderId);
       return next;
     });
-  };
+  }, []);
 
   const handleSettingsClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    setSettingsTab(null);
+    setShowSettings(true);
+  };
+
+  // 同步指示器：同步中转圈 / 异常红标 / 正常灰标；点击跳转同步设置
+  const openSyncSettings = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSettingsTab('sync');
     setShowSettings(true);
   };
 
@@ -287,8 +312,9 @@ export default function Sidebar({
     });
   }, [onMarkAllRead, onFetchSource, onClearFolderSources, onRenameFolder, onDeleteFolder]);
 
-  // 递归渲染文件夹节点：renderChildFolder 指向自身，支持任意深度嵌套
-  const renderFolderNode = (folder: Folder): React.ReactNode => {
+  // 递归渲染文件夹节点：renderChildFolder 指向自身，支持任意深度嵌套。
+  // useCallback 稳定函数身份，避免每次渲染重建导致 React.memo（FolderNode）整树失效（m-14）。
+  const renderFolderNode = useCallback((folder: Folder): React.ReactNode => {
     const expanded = expandedFolders.has(folder.id);
     const unread = folderUnread(folder.id);
     const isSelected = selectedFolderId === folder.id;
@@ -315,7 +341,23 @@ export default function Sidebar({
         onContextMenuHandler={showMenu}
       />
     );
-  };
+  }, [
+    expandedFolders,
+    selectedFolderId,
+    selectedSourceId,
+    folderUnread,
+    folderSources,
+    folderChildren,
+    sortFoldersByUnreadDescThenName,
+    sortByUnreadDescThenName,
+    isUnhealthySource,
+    onSelectFolder,
+    onSelectSource,
+    toggleFolder,
+    showMenu,
+    buildFolderMenuItems,
+    sourceMenuItems,
+  ]);
 
   const renderFolderTree = (rootFolders: Folder[]) => {
     return sortFoldersByUnreadDescThenName(rootFolders).map(renderFolderNode);
@@ -379,7 +421,7 @@ export default function Sidebar({
           }}
         />
         <FilterRow
-          icon={<AlertTriangle size={16} />}
+          icon={<Circle size={16} />}
           label="未读文章"
           count={unreadCountInScope}
           countTone="muted"
@@ -455,6 +497,17 @@ export default function Sidebar({
           </div>
         ) : (
         <>
+        {abnormalCount > 0 && (
+          <button
+            type="button"
+            onClick={() => onFetchSource({})}
+            title="部分订阅源暂时无法连接，点击立即重试全部"
+            className="mx-1.5 mb-1 flex w-[calc(100%-12px)] items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-warning transition-colors hover:bg-hover"
+          >
+            <AlertTriangle size={12} className="shrink-0" />
+            <span>{abnormalCount} 个源异常，点击重试</span>
+          </button>
+        )}
         {renderFolderTree(folders.filter((f) => f.parentId === null))}
 
         {sortedUncategorized.length > 0 && (
@@ -464,7 +517,7 @@ export default function Sidebar({
               <SourceRow
                 key={source.id}
                 source={source}
-                bad={isUnhealthySource(source)}
+                health={sourceHealthState(source)}
                 active={selectedSourceId === source.id}
                 onClick={() => {
                   onSelectSource(source.id);
@@ -487,6 +540,24 @@ export default function Sidebar({
           <Settings size={16} />
           <span>设置</span>
         </button>
+        {syncStatus && (syncStatus.enabled || syncStatus.syncing) && (
+          <button
+            onClick={openSyncSettings}
+            title={
+              syncStatus.syncing
+                ? '同步进行中'
+                : syncStatus.lastError
+                  ? `同步异常：${syncStatus.lastError}`
+                  : '服务端同步已启用'
+            }
+            className={cn(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-hover',
+              syncStatus.syncing ? 'text-primary' : syncStatus.lastError ? 'text-danger' : 'text-muted'
+            )}
+          >
+            <RefreshCw size={14} className={syncStatus.syncing ? 'animate-spin' : ''} />
+          </button>
+        )}
       </div>
 
       {menuProps && <ContextMenu {...menuProps} />}
@@ -500,11 +571,19 @@ export default function Sidebar({
           onAddSource={onAddSource}
           sources={sources}
           folders={folders}
+          initialTab={settingsTab ?? undefined}
         />
       )}
 
     </aside>
   );
+}
+
+// 源健康分级（T-v03-04）：bad=连续失败≥3（红标）、warn=退避中（橙标）、ok=健康（零标记）
+function sourceHealthState(s: { fetchFailCount?: number; lastError?: string | null }): 'ok' | 'warn' | 'bad' {
+  if ((s.fetchFailCount || 0) >= 3) return 'bad';
+  if (s.lastError != null) return 'warn';
+  return 'ok';
 }
 
 function FilterRow({
@@ -552,14 +631,14 @@ function FilterRow({
 const SourceRow = React.memo(function SourceRow({
   source,
   active,
-  bad,
+  health,
   indent,
   onClick,
   onContextMenu,
 }: {
   source: Source;
   active: boolean;
-  bad: boolean;
+  health: 'ok' | 'warn' | 'bad';
   indent?: boolean;
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -571,11 +650,18 @@ const SourceRow = React.memo(function SourceRow({
     // keep original url
   }
 
+  const healthTitle =
+    health === 'bad'
+      ? source.lastError ?? '订阅源连续失败'
+      : health === 'warn'
+        ? source.lastError ?? '订阅源暂时不可用'
+        : source.name;
+
   return (
     <button
       onClick={onClick}
       onContextMenu={onContextMenu}
-      title={bad ? source.lastError ?? '订阅源超时' : source.name}
+      title={healthTitle}
       className={cn(
         'group flex w-full flex-col rounded-md py-1.5 pr-2 text-[13px] transition-colors',
         indent ? 'pl-7' : 'pl-2',
@@ -587,14 +673,16 @@ const SourceRow = React.memo(function SourceRow({
         <span
           className={cn(
             'truncate',
-            bad && 'text-danger',
-            !bad && source.unreadCount > 0 ? 'font-medium text-primary' : ''
+            health === 'bad' && 'text-danger',
+            health === 'ok' && source.unreadCount > 0 ? 'font-medium text-primary' : ''
           )}
         >
           {source.name}
         </span>
-        {bad ? (
+        {health === 'bad' ? (
           <AlertTriangle size={13} className="ml-auto shrink-0 text-danger" />
+        ) : health === 'warn' ? (
+          <AlertTriangle size={13} className="ml-auto shrink-0 text-warning" />
         ) : source.unreadCount > 0 ? (
           <span className="ml-auto shrink-0 rounded-full bg-hover px-1.5 text-[11px] font-medium text-muted">
             {source.unreadCount}
@@ -679,7 +767,7 @@ const FolderNode = React.memo(function FolderNode({
             <SourceRow
               key={source.id}
               source={source}
-              bad={(source.fetchFailCount || 0) >= 3 || source.lastError != null}
+              health={sourceHealthState(source)}
               active={selectedSourceId === source.id}
               indent
               onClick={() => {

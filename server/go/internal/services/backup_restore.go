@@ -107,6 +107,8 @@ func (s *ReaderService) restoreFromFile(tmpPath string) error {
 
 	// 导入/恢复后使未读计数缓存失效，下次 GetSources 重算为导入后的真实值（P2-1/B）
 	s.invalidateUnreadCount()
+	// 恢复后数据库内容已替换，设置缓存一并失效，避免读到旧库的过期设置（m-05）
+	s.InvalidateSettingsCache()
 	slog.Info("restore: completed")
 	return nil
 }
@@ -133,6 +135,7 @@ func (s *ReaderService) reinitAfterRestoreFailure() {
 	}
 	s.db = database.GetDB()
 	s.invalidateUnreadCount()
+	s.InvalidateSettingsCache()
 	slog.Info("restore: database reinitialized after failure")
 }
 

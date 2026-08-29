@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -132,13 +133,51 @@ func (s *ReaderService) GetAllSettings() (map[string]string, error) {
 	return result, nil
 }
 
-// GetSetting 获取单个设置项，不存在返回空字符串
+// GetSetting 获取单个设置项，不存在返回空字符串。
+// 使用全表内存缓存 + seq 失效：scheduler 每分钟 tick、每次 BuildFetchHTTPClient
+// 等高频路径不再逐项查 DB（m-05）。seq 在 UpdateSettings 与数据库恢复后递增强制重载。
 func (s *ReaderService) GetSetting(key string) string {
-	var setting models.Setting
-	if err := s.getDb().Where("`key` = ?", key).First(&setting).Error; err != nil {
+	seq := atomic.LoadInt64(&s.settingsCacheSeq)
+
+	s.settingsCacheMu.RLock()
+	if s.settingsCache != nil && s.settingsCacheLoad == seq {
+		v, ok := s.settingsCache[key]
+		s.settingsCacheMu.RUnlock()
+		if ok {
+			return v
+		}
 		return ""
 	}
-	return setting.Value
+	s.settingsCacheMu.RUnlock()
+
+	// 缓存缺失或过期：重载全表
+	var settings []models.Setting
+	if err := s.getDb().Find(&settings).Error; err != nil {
+		return ""
+	}
+	loaded := make(map[string]string, len(settings))
+	for _, st := range settings {
+		loaded[st.Key] = st.Value
+	}
+
+	s.settingsCacheMu.Lock()
+	s.settingsCache = loaded
+	s.settingsCacheLoad = seq
+	s.settingsCacheMu.Unlock()
+	slog.Debug("settings cache rebuilt", "count", len(loaded), "seq", seq)
+
+	v, ok := loaded[key]
+	if ok {
+		return v
+	}
+	return ""
+}
+
+// InvalidateSettingsCache 使设置缓存失效，下次 GetSetting 重新从 DB 加载。
+// 在设置写入或数据库替换（导入/恢复）后调用。
+func (s *ReaderService) InvalidateSettingsCache() {
+	seq := atomic.AddInt64(&s.settingsCacheSeq, 1)
+	slog.Debug("settings cache invalidated", "seq", seq)
 }
 
 // GetSettingInt 获取整数型设置项，不存在或解析失败返回默认值
@@ -180,6 +219,8 @@ func (s *ReaderService) UpdateSettings(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	// 设置写入后使设置缓存失效（m-05）
+	s.InvalidateSettingsCache()
 	// 代理设置变更时，递增序列号使缓存失效
 	if _, ok := values["proxyEnabled"]; ok {
 		atomic.AddInt64(&s.proxySettingsSeq, 1)
@@ -194,12 +235,18 @@ func (s *ReaderService) UpdateSettings(values map[string]string) error {
 // retentionMax: 保留最新 N 篇文章（0=不限制）
 // excludeStarred: 收藏文章不清理
 // excludeReadLater: 稍后阅读文章不清理
-func (s *ReaderService) CleanupArticles(retentionDays, retentionMax int, excludeStarred, excludeReadLater bool) (int64, error) {
+func (s *ReaderService) CleanupArticles(retentionDays, retentionMax int, excludeStarred, excludeReadLater bool) (rowsAffected int64, err error) {
 	if retentionDays <= 0 && retentionMax <= 0 {
 		return 0, nil
 	}
 	tx := s.getDb().Begin()
-	defer s.recoverAndRollback(tx)
+	// 捕获 panic 并回写错误，避免 recover 后函数按零值返回 (0,nil)，让调用方误判清理成功。
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("cleanup articles panic: %v", r)
+			tx.Rollback()
+		}
+	}()
 
 	query := s.buildCleanupQuery(tx, excludeStarred, excludeReadLater, retentionDays)
 	if err := s.applyCleanupRetentionMax(tx, &query, retentionMax, excludeStarred, excludeReadLater); err != nil {
@@ -216,12 +263,6 @@ func (s *ReaderService) CleanupArticles(retentionDays, retentionMax int, exclude
 		return 0, err
 	}
 	return result.RowsAffected, nil
-}
-
-func (s *ReaderService) recoverAndRollback(tx *gorm.DB) {
-	if r := recover(); r != nil {
-		tx.Rollback()
-	}
 }
 
 func (s *ReaderService) buildCleanupQuery(tx *gorm.DB, excludeStarred, excludeReadLater bool, retentionDays int) *gorm.DB {

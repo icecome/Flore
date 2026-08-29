@@ -13,6 +13,7 @@ import (
 //   - 不再做「到期才抓」的筛选——RSS 源何时发文章不可预测，「到期制」必然漏抓已发布文章。
 //   - 每个轮询周期提交所有 active 源（跳过退避中的坏源），未变化的源靠 HTTP 304 协商零成本跳过。
 //   - 因此无论手动刷新还是自动调度，源内已正常发布的文章一定会被抓到，行为完全一致。
+//
 // 职责极简：到点调用 coordinator.SubmitAllSources，由 Coordinator 统一负责去重/并发/退避。
 type Scheduler struct {
 	service *ReaderService
@@ -76,6 +77,7 @@ func (sch *Scheduler) persistLastRetentionAt(t time.Time) {
 //   - 开启：立即全量轮询一次，打开即最新；
 //   - 关闭：不立即抓取，把首次轮询推迟到第一个周期（fetchInterval），
 //     避免与前端 useFetchOrchestration 的启动抓取逻辑冲突。
+//
 // 之后按 checkInterval 节拍检查，达到轮询周期则再触发全量抓取。
 func (sch *Scheduler) Start() {
 	sch.mu.Lock()

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Folder, Item, Source } from '../types';
 import { cn } from '../lib/cn';
 import { formatDate, formatTime, formatRelative } from '../lib/format';
@@ -12,6 +12,37 @@ import { buildArticleRowMenu, buildArticleListHeaderMenu } from '../utils/contex
 import { StarIcon, StarFilledIcon, RefreshCw, Circle, CheckCheck, Clock, Download, Square, CheckSquare, Check } from './icons';
 
 type FilterType = 'all' | 'unread' | 'starred' | 'readLater';
+
+// ---- 未读时间分层（T-v03-05）----
+// "今天 / 本周"一律按用户本地时区（系统时区）计算，本周期起点为周一。
+type UnreadSegment = 'today' | 'week' | 'all';
+
+const UNREAD_SEGMENT_OPTIONS: { value: UnreadSegment; label: string }[] = [
+  { value: 'today', label: '今天' },
+  { value: 'week', label: '本周' },
+  { value: 'all', label: '全部' },
+];
+
+function startOfTodayLocal(): number {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function startOfWeekLocal(): number {
+  const now = new Date();
+  const daysSinceMonday = (now.getDay() + 6) % 7;
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysSinceMonday).getTime();
+}
+
+// 纯前端按 PubDate 过滤（仅未读视图的今天/本周生效；全部直接透传）
+function filterItemsBySegment(items: Item[], segment: UnreadSegment): Item[] {
+  if (segment === 'all') return items;
+  const start = segment === 'today' ? startOfTodayLocal() : startOfWeekLocal();
+  return items.filter((it) => {
+    if (!it.pubDate) return false;
+    return new Date(it.pubDate).getTime() >= start;
+  });
+}
 
 function getArticleListTitle({
   isSearchMode,
@@ -44,6 +75,8 @@ interface Props {
   filter: FilterType;
   totalCount: number;
   globalUnreadCount: number;
+  readLaterCount: number;
+  starredCount: number;
   settings: AppSettings;
   searchKeyword?: string;
   isSearchMode?: boolean;
@@ -77,6 +110,8 @@ export default function ArticleList({
   filter,
   totalCount,
   globalUnreadCount,
+  readLaterCount,
+  starredCount,
   settings,
   searchKeyword = '',
   isSearchMode = false,
@@ -113,9 +148,35 @@ export default function ArticleList({
   }>({ hasMore, loadingMore, onLoadMore });
   loadMoreStateRef.current = { hasMore, loadingMore, onLoadMore };
 
-  // 右键菜单需要完整列表，用 ref 持有以保证回调引用稳定（否则每次 items 变化都会让所有行重渲染）
+  // 右键菜单/全选需要当前显示列表，用 ref 持有以保证回调引用稳定（否则每次 items 变化都会让所有行重渲染）
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+
+  // ---- 未读时间分层（T-v03-05）：今天/本周/全部，默认「今天」 ----
+  const [unreadSegment, setUnreadSegment] = useState<UnreadSegment>('today');
+
+  // 分段栏在未读相关所有视图（全局/源/文件夹）显示；搜索时隐藏
+  const showSegmentBar = !isSearchMode && filter === 'unread';
+
+  const handleSelectSegment = useCallback((segment: UnreadSegment) => {
+    setUnreadSegment(segment);
+  }, []);
+
+  // 切入源/文件夹时重置时间分层为「全部」，保证列表与侧边栏该范围未读数一致
+  const scopeKeyRef = useRef('');
+  useEffect(() => {
+    const key = currentSource ? `source-${currentSource.id}` : currentFolder ? `folder-${currentFolder.id}` : '';
+    if (key && key !== scopeKeyRef.current) {
+      setUnreadSegment('all');
+    }
+    scopeKeyRef.current = key;
+  }, [currentSource, currentFolder]);
+
+  // 纯前端时间筛选：仅未读视图的今天/本周生效；搜索时不过滤
+  const visibleItems = useMemo(() => {
+    if (filter !== 'unread' || isSearchMode || unreadSegment === 'all') return items;
+    return filterItemsBySegment(items, unreadSegment);
+  }, [items, filter, isSearchMode, unreadSegment]);
+  itemsRef.current = visibleItems;
 
   // 监听容器滚动，保存当前位置 + 触底自动加载下一页
   useEffect(() => {
@@ -155,16 +216,16 @@ export default function ArticleList({
     if (settings.markReadMode !== 'scroll') return;
 
     // 跟踪已可见的条目，仅当从可见变为不可见时才标记已读
-    const visibleItems = new Set<number>();
+    const visibleIds = new Set<number>();
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
           const id = Number(entry.target.getAttribute('data-item-id'));
           if (!id || isNaN(id)) return;
           if (entry.isIntersecting) {
-            visibleItems.add(id);
-          } else if (visibleItems.has(id)) {
-            visibleItems.delete(id);
+            visibleIds.add(id);
+          } else if (visibleIds.has(id)) {
+            visibleIds.delete(id);
             onToggleRead(id, true);
           }
         });
@@ -175,7 +236,7 @@ export default function ArticleList({
     itemRefs.current.forEach((el) => observer.observe(el));
 
     return () => observer.disconnect();
-  }, [settings.markReadMode, onToggleRead, items]);
+  }, [settings.markReadMode, onToggleRead, visibleItems]);
 
   // 刷新旋转：直接操作 DOM，彻底绕过 CSS 动画问题
   const refreshIconRef = useRef<SVGSVGElement>(null);
@@ -263,18 +324,28 @@ export default function ArticleList({
 
   // 显示计数信息：仅全部文章 / 源 / 文件夹视图显示"· N 未读"
   const showHeaderCount = useMemo(() => {
-    // 未读视图：显示未读数作为总数（不显示"未读"后缀，因为本身就是未读）
+    // 搜索模式：显示搜索结果条数
+    if (isSearchMode) {
+      return { total: visibleItems.length, unread: 0 };
+    }
+    // 未读视图：显示真实总未读数（与侧边栏一致），分段过滤只影响列表内容
     if (filter === 'unread') {
       return { total: globalUnreadCount, unread: 0 };
     }
-    const isGlobalScope = !isSearchMode && filter === 'all' && !currentSource && !currentFolder;
-    const isSourceOrFolder = !isSearchMode && (currentSource || currentFolder);
+    // 收藏 / 稍后阅读：显示各自分类总数
+    if (filter === 'starred') {
+      return { total: starredCount, unread: 0 };
+    }
+    if (filter === 'readLater') {
+      return { total: readLaterCount, unread: 0 };
+    }
+    const isGlobalScope = filter === 'all' && !currentSource && !currentFolder;
+    const isSourceOrFolder = currentSource || currentFolder;
     if (isGlobalScope || isSourceOrFolder) {
       return { total: totalCount, unread: globalUnreadCount };
     }
-    // 未读 / 收藏 / 稍后阅读 / 搜索：只显示总数，不追加未读数
     return { total: totalCount, unread: 0 };
-  }, [totalCount, globalUnreadCount, isSearchMode, filter, currentSource, currentFolder]);
+  }, [totalCount, globalUnreadCount, isSearchMode, filter, currentSource, currentFolder, visibleItems.length, starredCount, readLaterCount]);
 
   return (
     <section className="relative flex h-full w-[360px] shrink-0 flex-col border-r border-border bg-surface">
@@ -322,6 +393,27 @@ export default function ArticleList({
               <span className="text-secondary"> · {showHeaderCount.unread} 未读</span>
             )}
           </span>
+          {showSegmentBar && (
+            <div className="flex items-center gap-0.5" role="tablist" aria-label="未读时间分层">
+              {UNREAD_SEGMENT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={unreadSegment === opt.value}
+                  onClick={() => handleSelectSegment(opt.value)}
+                  className={cn(
+                    'rounded-full px-2 py-0.5 text-[11.5px] transition-colors',
+                    unreadSegment === opt.value
+                      ? 'bg-primary-subtle font-medium text-primary'
+                      : 'text-muted hover:bg-hover hover:text-secondary'
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
@@ -333,13 +425,13 @@ export default function ArticleList({
       >
         {loading ? (
           <Loading text="正在加载文章列表..." fullHeight />
-        ) : items.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
             <CheckCheck size={28} className="text-border-strong" />
             <p className="text-[13px] text-muted">没有更多文章了</p>
           </div>
         ) : (
-          items.map((item, idx) => (
+          visibleItems.map((item, idx) => (
             <ArticleRow
               key={item.id}
               item={item}
@@ -362,20 +454,20 @@ export default function ArticleList({
         )}
       </div>
 
-      {multiSelectMode && items.length > 0 && (
+      {multiSelectMode && visibleItems.length > 0 && (
         <div className="absolute bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-1.5 shadow-md">
           <IconButton size="sm" onClick={onToggleMultiSelect} title="完成">
             <Check size={15} />
           </IconButton>
           <span className="whitespace-nowrap px-1 text-[13px] text-secondary">
-            {selectedIds.length} / {items.length} 已选
+            {selectedIds.length} / {visibleItems.length} 已选
           </span>
           <IconButton
             size="sm"
             onClick={handleSelectAll}
-            title={selectedIds.length === items.length ? '取消全选' : '全选当前列表'}
+            title={selectedIds.length === visibleItems.length ? '取消全选' : '全选当前列表'}
           >
-            {selectedIds.length === items.length ? (
+            {selectedIds.length === visibleItems.length ? (
               <CheckSquare size={15} />
             ) : (
               <Square size={15} />

@@ -14,7 +14,11 @@ const defaultManifestURL = "https://cdn-dl.icecome.com/flore/update.json"
 
 // fallbackManifestURL 为兜底地址：当主通道（R2 自定义域）不可达时，
 // 从 GitHub Release 拉取 update.json（由 release.yml 作为 Release 资产发布）。
-const fallbackManifestURL = "https://github.com/icecome/Flore/releases/latest/download/update.json"
+//
+// 说明：仓库地址采用构建期注入（-ldflags -X desktop/internal/updater.fallbackManifestURL=...），
+// 发布流水线用 github.repository 动态生成，避免与特定仓库硬编码耦合；同时不引入运行时 env 覆盖，
+// 防止更新通道被劫持（见 manifestURLs 安全说明）。
+var fallbackManifestURL = "https://github.com/icecome/Flore/releases/latest/download/update.json"
 
 // Asset 描述一个平台的可下载更新资产。
 type Asset struct {

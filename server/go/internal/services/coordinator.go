@@ -97,9 +97,15 @@ func (c *FetchCoordinator) Stop() {
 }
 
 // Submit 提交单个源抓取任务。
+// 远端同步源（remoteOrigin 非空）不参与本地抓取，直接丢弃。
 // 重复提交（已在 inFlight 或 pending）自动丢弃，返回 false。
 // 队列已满时也丢弃并返回 false，避免阻塞调用方。
 func (c *FetchCoordinator) Submit(sourceID int) bool {
+	var origin string
+	if err := c.service.getDb().Model(&models.Source{}).Select("remoteOrigin").
+		Where("id = ?", sourceID).Scan(&origin).Error; err == nil && origin != "" {
+		return false
+	}
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
@@ -151,11 +157,12 @@ func (c *FetchCoordinator) SubmitAll(sourceIDs []int) int {
 
 // SubmitAllSources 查询所有 active 源并提交抓取。
 // 供手动"刷新全部"和调度器使用。
+// 远端同步源（remoteOrigin 非空）不参与本地抓取，由 Sync Engine 接管。
 // skipBackedOff=true 时排除处于退避期的僵尸源（抓取持续失败的源），
 // 避免每次全量刷新都被这些源（超时/503）拖慢整体，同时正常源仍全部更新。
 func (c *FetchCoordinator) SubmitAllSources(skipBackedOff bool) int {
 	var sourceIDs []int64
-	if err := c.service.getDb().Model(&models.Source{}).Where("active = ?", true).Pluck("id", &sourceIDs).Error; err != nil {
+	if err := c.service.getDb().Model(&models.Source{}).Where("active = ? AND remoteOrigin = ''", true).Pluck("id", &sourceIDs).Error; err != nil {
 		slog.Error("fetch coordinator: query sources failed", "error", err)
 		return 0
 	}
@@ -212,10 +219,10 @@ func nextRetryUnix(failCount int) int64 {
 	return time.Now().Add(time.Duration(secs) * time.Second).Unix()
 }
 
-// SubmitFolder 提交文件夹下所有源抓取。
+// SubmitFolder 提交文件夹下所有源抓取（远端同步源除外，由 Sync Engine 接管）。
 func (c *FetchCoordinator) SubmitFolder(folderID int) int {
 	var sourceIDs []int64
-	if err := c.service.getDb().Model(&models.Source{}).Where("folderId = ? AND active = ?", folderID, true).Pluck("id", &sourceIDs).Error; err != nil {
+	if err := c.service.getDb().Model(&models.Source{}).Where("folderId = ? AND active = ? AND remoteOrigin = ''", folderID, true).Pluck("id", &sourceIDs).Error; err != nil {
 		slog.Error("fetch coordinator: query folder sources failed", "folder_id", folderID, "error", err)
 		return 0
 	}

@@ -58,5 +58,11 @@ jobs:
           touch apps/desktop/frontend/dist/.gitkeep
           cd apps/desktop && go mod download && go build ./... && go vet ./...
 
+      # 桌面壳安全关键路径单测：验签（篡改/错误密钥/缺签名拒绝）、zip-slip、版本比较。
+      # 测试文件无平台标签、ubuntu 可运行，此前从未在 CI 执行（M-R2）。
+      - name: Desktop updater tests
+        run: |
+          cd apps/desktop && go test ./internal/updater/...
+
       - name: Build frontend
         run: npm run build:web

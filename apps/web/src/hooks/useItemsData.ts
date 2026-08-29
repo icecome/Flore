@@ -21,6 +21,7 @@ export interface UseItemsDataResult {
   items: Item[];
   totalCount: number;
   readLaterCount: number;
+  starredCount: number;
   loadingItems: boolean;
   searchKeyword: string;
   isSearchMode: boolean;
@@ -33,6 +34,7 @@ export interface UseItemsDataResult {
   loadingMore: boolean;
   fetchItemCount: (signal?: AbortSignal) => Promise<void>;
   fetchReadLaterCount: (signal?: AbortSignal) => Promise<void>;
+  fetchStarredCount: (signal?: AbortSignal) => Promise<void>;
   fetchSearchItems: (keyword: string, signal?: AbortSignal) => Promise<void>;
 }
 
@@ -51,6 +53,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
   const [items, setItems] = useState<Item[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [readLaterCount, setReadLaterCount] = useState(0);
+  const [starredCount, setStarredCount] = useState(0);
   const [loadingItems, setLoadingItems] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [isSearchMode, setIsSearchMode] = useState(false);
@@ -130,6 +133,22 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     }
   }, [settings.hidePrivateInTimeline]);
 
+  // 获取收藏数
+  const fetchStarredCount = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const params = new URLSearchParams();
+      params.append('starred', 'true');
+      if (settings.hidePrivateInTimeline) {
+        params.append('hidePrivate', 'true');
+      }
+      setStarredCount(await countItems(params, signal));
+    } catch (err) {
+      if (signal?.aborted) return;
+      console.error('Failed to fetch starred count:', err);
+      showToast('获取收藏数失败');
+    }
+  }, [settings.hidePrivateInTimeline]);
+
   // 获取文章列表（分页）
   const fetchItems = useCallback(async (signal?: AbortSignal, opts?: { append?: boolean }) => {
     const append = opts?.append ?? false;
@@ -201,15 +220,17 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       fetchItemCount(signal);
       fetchUnreadCount(signal);
       fetchReadLaterCount(signal);
+      fetchStarredCount(signal);
       setSelectedItem(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSearchMode, searchKeyword, filter, selectedSourceId, selectedFolderId, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount]);
+  }, [isSearchMode, searchKeyword, filter, selectedSourceId, selectedFolderId, fetchSearchItems, fetchItems, fetchItemCount, fetchUnreadCount, fetchReadLaterCount, fetchStarredCount]);
 
   return {
     items,
     totalCount,
     readLaterCount,
+    starredCount,
     loadingItems,
     searchKeyword,
     isSearchMode,
@@ -222,6 +243,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     loadingMore,
     fetchItemCount,
     fetchReadLaterCount,
+    fetchStarredCount,
     fetchSearchItems,
   };
 }

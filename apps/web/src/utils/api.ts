@@ -5,7 +5,7 @@
 import { showToast } from './toast';
 import { getApi, getApiBase, setApiBase, setApiToken } from './apiBase';
 import { fetchData, request, requestJson, requestOrServerError, requestVoid } from './fetchData';
-import type { FilterRule, Folder, Item, Source } from '../types';
+import type { FilterRule, Folder, Item, Source, SyncConfig, SyncResult, SyncStatus, SyncAlignResult } from '../types';
 
 export { getApi, getApiBase, setApiBase } from './apiBase';
 
@@ -36,7 +36,7 @@ interface WailsApp {
   WindowClose?: () => void;
   RefreshWindowSettings?: () => void;
   RestartApp?: () => Promise<void>;
-  SaveWindowState?: (maximised: boolean) => void;
+  SaveWindowState?: (maximised: boolean) => Promise<void>;
   /** 桌面端提供后端 API Token，前端访问敏感接口时附加 Bearer 鉴权头（M5 集成） */
   GetAPIToken?: () => Promise<string>;
   /** 检查更新，返回更新信息或 null（无更新）；仅桌面端可用 */
@@ -430,6 +430,69 @@ export function deleteFolder(id: number): Promise<void> {
 /** 清空文件夹内订阅源归属（保留文件夹本身） */
 export function clearFolderSources(id: number): Promise<void> {
   return requestVoid(`/folders/${id}/clear`, { method: 'POST' });
+}
+
+// ---------------------------------------------------------------- 服务端同步
+
+/** 读取同步配置（敏感字段脱敏返回） */
+export function getSyncConfig(signal?: AbortSignal): Promise<SyncConfig> {
+  return fetchData<SyncConfig>('/sync/config', { signal });
+}
+
+/** 写入同步配置；敏感字段传回掩码值（**** 开头）时后端保留原值 */
+export async function updateSyncConfig(values: Record<string, string>): Promise<SyncConfig> {
+  const res = await requestOrServerError('/sync/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values),
+    fallbackError: '保存同步配置失败',
+  });
+  return (await res.json()) as SyncConfig;
+}
+
+/** 测试当前同步配置的连通性与认证（透传后端 error 文案） */
+export async function testSyncConnection(): Promise<void> {
+  await requestOrServerError('/sync/test', {
+    method: 'POST',
+    fallbackError: '连接失败，请检查地址与凭证',
+  });
+}
+
+/** 测试文件后端（WebDAV）连通性与认证（透传后端 error 文案） */
+export async function testFileConnection(): Promise<void> {
+  await requestOrServerError('/sync/test-file', {
+    method: 'POST',
+    fallbackError: '连接失败，请检查地址与凭证',
+  });
+}
+
+/** 手动触发一次全量同步（一轮可能分钟级，超时对齐后端 5 分钟） */
+export async function triggerSync(): Promise<SyncResult> {
+  const res = await requestOrServerError('/sync/trigger', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    timeoutMs: 300000,
+    fallbackError: '同步失败',
+  });
+  return (await res.json()) as SyncResult;
+}
+
+/** 同步健康状态（供指示器轮询） */
+export function getSyncStatus(signal?: AbortSignal): Promise<SyncStatus> {
+  return fetchData<SyncStatus>('/sync/status', { signal });
+}
+
+/** 对齐向导：推送本地独有源到远端（逐源推送可能较慢，超时放宽） */
+export async function alignSubscriptions(urls: string[]): Promise<SyncAlignResult> {
+  const res = await requestOrServerError('/sync/align', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+    timeoutMs: 120000,
+    fallbackError: '推送订阅失败',
+  });
+  return (await res.json()) as SyncAlignResult;
 }
 
 /** 触发抓取：指定源 / 指定文件夹 / 全部 */

@@ -162,6 +162,10 @@ export interface AppSettings {
 
   // === 隐私 ===
   faviconMode: 'off' | 'yandex' | 'direct';
+
+  // === 更新（桌面端） ===
+  updateCheckOnStartup: boolean;
+  lastUpdateCheckAt: number; // 上次启动检查更新的时间戳（毫秒），用于 3 天节流
 }
 
 const STORAGE_KEY = 'flore-settings';
@@ -232,6 +236,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
   // 隐私
   faviconMode: 'off',
+
+  // 更新（桌面端）
+  updateCheckOnStartup: true,
+  lastUpdateCheckAt: 0,
 };
 
 // 迁移旧版 mark 已读配置到新字段（优先级：hover > scroll > view）
@@ -528,105 +536,4 @@ export function applyAccentColor(color: string): void {
   _pendingColor = color;
   if (_rafId) return;
   _rafId = requestAnimationFrame(tickAccentColor);
-}
-
-/** 导入配置文件的顶层结构 */
-interface ExportedConfig {
-  settings?: Record<string, unknown>;
-  theme?: string;
-  serverSettings?: Record<string, string>;
-}
-
-/** 从选中的 JSON 文件中读取并导入配置 */
-async function applyImportedConfig(file: File): Promise<boolean> {
-  try {
-    const text = await file.text();
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== 'object' || parsed === null) return false;
-    const config = parsed as ExportedConfig;
-    if (config.settings && typeof config.settings === 'object') {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(config.settings));
-    }
-    if (typeof config.theme === 'string') {
-      localStorage.setItem('theme', config.theme);
-    }
-    // 后端设置（备份策略、留存策略、代理等）一并写回，确保配置备份可完整迁移（M-A1）
-    if (config.serverSettings && typeof config.serverSettings === 'object') {
-      try {
-        await putServerSettings(config.serverSettings);
-      } catch (err) {
-        // 后端写入失败忽略，前端配置已落地
-        console.error('Failed to import server settings:', err);
-      }
-    }
-    return true;
-  } catch (err) {
-    console.error('Failed to import config file:', err);
-    return false;
-  }
-}
-
-/** 窗口重新获得焦点后，等待 change 事件的宽限期 */
-const FILE_PICK_GRACE_MS = 800;
-/** 用户长时间未操作时释放 Promise，避免调用方永久挂起 */
-const FILE_PICK_TIMEOUT_MS = 120000;
-
-/**
- * 弹出文件选择框导入配置。
- * 注意：窗口 focus 事件早于 input 的 change 事件触发，
- * 若在 focus 时立即以「取消」结算 Promise，用户真实选择的文件会被静默丢弃。
- * 因此 focus 只启动宽限计时，超时且确实没有选中文件才判定为取消。
- */
-export function importConfig(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.style.display = 'none';
-
-    let settled = false;
-    let graceTimer: ReturnType<typeof setTimeout> | null = null;
-    let guardTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const clearTimers = () => {
-      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
-      if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
-    };
-
-    const finish = (result: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimers();
-      window.removeEventListener('focus', onFocus);
-      input.remove();
-      resolve(result);
-    };
-
-    const onFocus = () => {
-      if (graceTimer) clearTimeout(graceTimer);
-      graceTimer = setTimeout(() => {
-        if (!input.files || input.files.length === 0) finish(false);
-      }, FILE_PICK_GRACE_MS);
-    };
-
-    // 现代浏览器在用户点「取消」时会派发 cancel 事件，可立即结算
-    input.addEventListener('cancel', () => finish(false));
-
-    input.onchange = async () => {
-      // 已选中文件：先停掉取消判定，再执行异步导入，避免宽限期内被误判
-      clearTimers();
-      window.removeEventListener('focus', onFocus);
-      const file = input.files?.[0];
-      if (!file) {
-        finish(false);
-        return;
-      }
-      finish(await applyImportedConfig(file));
-    };
-
-    document.body.appendChild(input);
-    window.addEventListener('focus', onFocus);
-    guardTimer = setTimeout(() => finish(false), FILE_PICK_TIMEOUT_MS);
-    input.click();
-  });
 }

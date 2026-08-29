@@ -168,8 +168,13 @@ func AutoMigrate() error {
 		return err
 	}
 	// 删除旧的 link 全局 unique 索引（已改为 link+sourceId 复合唯一索引）
-	DB.Exec("DROP INDEX IF EXISTS idx_items_link")
-	DB.Exec("DROP INDEX IF EXISTS uni_items_link")
+	// 索引可经 IF EXISTS 容忍不存在，但 DROP 失败需上报，避免遗留错误表结构影响迁移正确性。
+	if err := DB.Exec("DROP INDEX IF EXISTS idx_items_link").Error; err != nil {
+		return fmt.Errorf("failed to drop legacy index idx_items_link: %w", err)
+	}
+	if err := DB.Exec("DROP INDEX IF EXISTS uni_items_link").Error; err != nil {
+		return fmt.Errorf("failed to drop legacy index uni_items_link: %w", err)
+	}
 	// 创建 FTS5 全文搜索虚拟表（Prisma/GORM 均不支持，需原生 SQL）
 	if err := DB.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS ItemSearch USING fts5(

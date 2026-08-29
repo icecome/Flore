@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -89,7 +88,9 @@ func addDiagnosticItem(w *zip.Writer, name string, data []byte) {
 		slog.Warn("failed to create zip entry", "name", name, "error", err)
 		return
 	}
-	f.Write(data)
+	if _, err := f.Write(data); err != nil {
+		slog.Warn("failed to write zip entry", "name", name, "error", err)
+	}
 }
 
 func generateDBSnapshot(svc *services.ReaderService) []byte {
@@ -136,33 +137,125 @@ func generateDBSnapshot(svc *services.ReaderService) []byte {
 	}
 	snapshot["items"] = itemStats
 
-	// Recent errors from backend log
+	// recentErrors 使用与 GenerateDiagnosticPackage 相同的日志解析，避免依赖 CWD（m-04）
 	snapshot["recentErrors"] = readLastLines("florebackend.log", 20)
 
 	return formatJSON(snapshot)
+}
+
+// resolveLogPath 返回日志文件的优先候选绝对路径。
+// backend 日志：优先 FLORE_LOG_FILE（桌面壳显式注入），否则退回 DATABASE_URL 目录；
+// desktop 日志：位于 DATABASE_URL 同级目录。统一切片供 readLastLines 依序尝试，
+// 修复原相对路径打开依赖进程 CWD 导致诊断日志恒为空的问题（m-04）。
+func resolveLogPath(filename string) []string {
+	if abs, err := filepath.Abs(filename); err == nil {
+		if _, statErr := os.Stat(abs); statErr == nil {
+			return []string{abs}
+		}
+	}
+	// 用 DB 目录推导：backend 日志可用显式 FLORE_LOG_FILE 覆盖
+	baseDir := "."
+	if dbPath := os.Getenv("DATABASE_URL"); dbPath != "" {
+		baseDir = filepath.Dir(dbPath)
+	}
+	if filename == "florebackend.log" {
+		if explicit := os.Getenv("FLORE_LOG_FILE"); explicit != "" {
+			if _, statErr := os.Stat(explicit); statErr == nil {
+				return []string{explicit}
+			}
+			return []string{explicit, filepath.Join(baseDir, filename)}
+		}
+		return []string{filepath.Join(baseDir, filename)}
+	}
+	return []string{filepath.Join(baseDir, filename)}
 }
 
 func readDesensitizedLog(filename string) []byte {
 	return readLastLines(filename, 100)
 }
 
+// readLastLines 从文件尾部反向读取最近 N 行，避免全量读入（日志上限 10MB）。
+// 依 resolveLogPath 候选依序尝试，首个存在且可读的文件生效（m-06）。
 func readLastLines(filename string, lines int) []byte {
-	file, err := os.Open(filename)
-	if err != nil {
+	var content []byte
+	for _, path := range resolveLogPath(filename) {
+		data, err := readTailLines(path, lines)
+		if err == nil {
+			content = data
+			break
+		}
+	}
+	if len(content) == 0 {
 		return []byte{}
+	}
+	return content
+}
+
+// readTailLines 从文件末尾反向扫描，读取最近 lines 行。
+func readTailLines(path string, lines int) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
 	defer file.Close()
 
-	content, err := io.ReadAll(file)
+	info, err := file.Stat()
 	if err != nil {
-		return []byte{}
+		return nil, err
 	}
-	linesSlice := strings.Split(string(content), "\n")
-	start := 0
-	if len(linesSlice) > lines {
-		start = len(linesSlice) - lines
+	size := info.Size()
+	if size == 0 {
+		return []byte{}, nil
 	}
-	return []byte(strings.Join(linesSlice[start:], "\n"))
+
+	// 从尾部向后读块（块大小上限 64KB），统计换行数直到收集到足够行或到达文件头。
+	// 单行超长时限制读取量，避免超大单行撑爆内存。
+	const chunkSize = 64 << 10
+	const maxScan = 8 << 20 // 最多向后读 8MB，超出视为单行超长
+	readSize := size
+	if readSize > maxScan {
+		readSize = maxScan
+	}
+
+	start := size - readSize
+	// 跳到块起始对齐边界
+	if start > 0 && start < size {
+		start -= 1
+	}
+
+	offset := start
+	buf := make([]byte, 0, chunkSize)
+	for offset < size {
+		end := offset + chunkSize
+		if end > size {
+			end = size
+		}
+		chunk := make([]byte, end-offset)
+		if _, err := file.ReadAt(chunk, offset); err != nil {
+			return nil, err
+		}
+		buf = append(buf, chunk...)
+		offset = end
+	}
+
+	// buf 为读尾部的内容，逆序扫描换行
+	str := string(buf)
+	linePositions := []int{-1}
+	for i, r := range str {
+		if r == '\n' {
+			linePositions = append(linePositions, i)
+		}
+	}
+	// 收集最近 lines 行
+	if len(linePositions) > lines {
+		linePositions = linePositions[len(linePositions)-lines-1:]
+	}
+	if len(linePositions) == 1 {
+		// 无换行：整段为一行
+		return []byte(str), nil
+	}
+	joined := str[linePositions[0]+1:]
+	return []byte(joined), nil
 }
 
 func generateSystemStats() []byte {
@@ -176,7 +269,8 @@ func generateSystemStats() []byte {
 func runtimeInfo() map[string]string {
 	return map[string]string{
 		"go_version": runtime.Version(),
-		"os":         strings.ToLower(strings.ReplaceAll(filepath.Ext(os.Args[0]), ".", "")),
+		// 直接用 runtime.GOOS 推断 OS，取代原"可执行文件扩展名"推断（macOS/Linux 恒为空，n-04）
+		"os": runtime.GOOS,
 	}
 }
 
