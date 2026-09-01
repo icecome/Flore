@@ -241,6 +241,8 @@ jobs:
           set -euo pipefail
           cd apps/desktop/build
           V="${{ steps.ver.outputs.version }}"
+          # deb 文件名把版本号里的 '-' 替换为 '.'（见 package-tool/main.go:230 debVer）
+          DEB_VER=$(echo "$V" | tr '-' '.')
           fail=0
           check() {
             local file="$1" limit_mb="$2" label="$3"
@@ -258,7 +260,7 @@ jobs:
           }
           check "flore-portable-windows-amd64-${V}.zip" 35 "Windows 便携 zip"
           check "flore-setup-windows-amd64-${V}.exe"   45 "Windows 安装 exe"
-          check "flore_${V}-1_amd64.deb"               40 "Linux deb"
+          check "flore_${DEB_VER}-1_amd64.deb"         40 "Linux deb"
           if [ -f "flore-setup-darwin-arm64-${V}.dmg" ]; then
             echo "  macOS dmg: $(du -m "flore-setup-darwin-arm64-${V}.dmg" | cut -f1)MB (仅观察)"
           fi
@@ -339,13 +341,17 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           # 本步骤在单一非矩阵 release job 中串行执行，不存在 job 间并发竞争；
           # 重推标签时 release 已存在、同名资产可能已在，用 --clobber 幂等覆盖
-          # （避免 "asset already exists"），调用顺序即 listing 顺序。
+          # （避免 "asset already exists"）。
+          # GitHub API 不保证 listing 顺序按 upload 顺序，所以下一步会调用
+          # scripts/fix-release-order.mjs --from-local 按期望顺序 delete-and-reupload。
+          # deb 文件名把版本号里的 '-' 替换为 '.'（见 package-tool/main.go:230 debVer）。
+          DEB_VER=$(echo "$V" | tr '-' '.')
           ASSETS=(
-            "apps/desktop/build/flore-portable-darwin-arm64-${V}.zip"
             "apps/desktop/build/flore-setup-darwin-arm64-${V}.dmg"
-            "apps/desktop/build/flore-portable-windows-amd64-${V}.zip"
+            "apps/desktop/build/flore-portable-darwin-arm64-${V}.zip"
             "apps/desktop/build/flore-setup-windows-amd64-${V}.exe"
-            "apps/desktop/build/flore_${V}-1_amd64.deb"
+            "apps/desktop/build/flore-portable-windows-amd64-${V}.zip"
+            "apps/desktop/build/flore_${DEB_VER}-1_amd64.deb"
             "apps/desktop/build/update.json"
           )
           for f in "${ASSETS[@]}"; do
@@ -357,3 +363,15 @@ jobs:
             echo "  upload (clobber): $NAME"
             gh release upload --clobber "$TAG" "$f"
           done
+
+      # 重新按"安装包类型 + 平台"顺序整理 release assets。
+      # GitHub API 后端不保证 listing 顺序与 upload 顺序一致，所以采取
+      # delete-all-then-reupload-from-local 的方式保证 listing 顺序。
+      - name: Reorder release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/fix-release-order.mjs \
+            --tag "${{ steps.ver.outputs.tag }}" \
+            --version "${{ steps.ver.outputs.version }}" \
+            --from-local

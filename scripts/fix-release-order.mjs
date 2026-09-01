@@ -37,12 +37,16 @@ function usage() {
   --from-local       从 apps/desktop/build/ 取本地文件（无网络下载）
   --help, -h         显示帮助
 
-期望顺序（按平台分组，mac 在前）:
-  1. flore-portable-darwin-arm64-<ver>.zip
-  2. flore-setup-darwin-arm64-<ver>.dmg
-  3. flore-portable-windows-amd64-<ver>.zip
-  4. flore-setup-windows-amd64-<ver>.exe
-  5. update.json`);
+期望顺序（按平台分组，setup 在前）:
+  1. flore-setup-darwin-arm64-<ver>.dmg
+  2. flore-portable-darwin-arm64-<ver>.zip
+  3. flore-setup-windows-amd64-<ver>.exe
+  4. flore-portable-windows-amd64-<ver>.zip
+  5. flore_<debVer>-1_amd64.deb
+  6. update.json
+
+  注: deb 文件名把版本号里的 '-' 替换为 '.'（见 package-tool/main.go:230 debVer）。
+`);
 }
 
 function sh(cmd, args, opts = {}) {
@@ -64,11 +68,13 @@ function ghJson(args) {
 }
 
 function desiredOrder(version) {
+  const debVer = version.replaceAll('-', '.');
   return [
-    `flore-portable-darwin-arm64-${version}.zip`,
     `flore-setup-darwin-arm64-${version}.dmg`,
-    `flore-portable-windows-amd64-${version}.zip`,
+    `flore-portable-darwin-arm64-${version}.zip`,
     `flore-setup-windows-amd64-${version}.exe`,
+    `flore-portable-windows-amd64-${version}.zip`,
+    `flore_${debVer}-1_amd64.deb`,
     `update.json`,
   ];
 }
