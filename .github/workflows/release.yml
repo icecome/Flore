@@ -180,7 +180,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: flore-${{ matrix.goos }}-${{ matrix.goarch }}
-          if-no-files-found: warn
+          # Linux 只有 deb 一个产物，缺失必须显式失败（否则会静默 warn 通过，
+          # 导致 release 缺包且只在后续 Reorder 步骤才暴露）。
+          if-no-files-found: ${{ matrix.goos == 'linux' && 'error' || 'warn' }}
           path: |
             apps/desktop/build/flore-portable-${{ matrix.goos }}-${{ matrix.goarch }}-*.zip
             apps/desktop/build/flore-setup-${{ matrix.goos }}-${{ matrix.goarch }}-*.exe

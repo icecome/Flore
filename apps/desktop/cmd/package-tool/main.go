@@ -228,16 +228,19 @@ func buildDeb(version, osArg, arch, binDir, outDir, appName, feBin *string) {
 		fatal("创建目录失败: %v", err)
 	}
 	debVer := strings.ReplaceAll(*version, "-", ".")
+	// Debian 包名规范要求小写，且与 zip/exe 产物命名保持一致；
+	// 可执行文件名仍用原始大小写（Flore）。
+	debPkg := strings.ToLower(*appName)
 	controlContent := fmt.Sprintf(
 		"Package: %s\nVersion: %s-1\nSection: utils\nPriority: optional\nArchitecture: %s\nMaintainer: Lice <werrice@outlook.com>\nDescription: %s RSS Reader\n",
-		*appName, debVer, *arch, *appName,
+		debPkg, debVer, *arch, *appName,
 	)
 	if err := os.WriteFile(filepath.Join(controlDir, "control"), []byte(controlContent), 0o644); err != nil {
 		fatal("写入 control 失败: %v", err)
 	}
 
 	// 构建 deb
-	outName := fmt.Sprintf("%s_%s-1_%s.deb", *appName, debVer, *arch)
+	outName := fmt.Sprintf("%s_%s-1_%s.deb", debPkg, debVer, *arch)
 	outPath := filepath.Join(*outDir, outName)
 	cmd := exec.Command("dpkg-deb", "--build", debianDir, outPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
