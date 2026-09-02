@@ -42,10 +42,11 @@ function usage() {
   2. flore-portable-darwin-arm64-<ver>.zip
   3. flore-setup-windows-amd64-<ver>.exe
   4. flore-portable-windows-amd64-<ver>.zip
-  5. flore_<debVer>-1_amd64.deb
+  5. flore-setup_<debVer>-1_amd64.deb
   6. update.json
 
-  注: deb 文件名把版本号里的 '-' 替换为 '.'（见 package-tool/main.go:230 debVer）。
+  注: deb 文件名符合 Debian 包名规范 <pkg>_<ver>-<rev>_<arch>.deb，
+      包名 flore-setup（带 setup 标识，与 release 列表的 setup/portable 分组对齐）。
 `);
 }
 
@@ -74,9 +75,23 @@ function desiredOrder(version) {
     `flore-portable-darwin-arm64-${version}.zip`,
     `flore-setup-windows-amd64-${version}.exe`,
     `flore-portable-windows-amd64-${version}.zip`,
-    `flore_${debVer}-1_amd64.deb`,
+    `flore-setup_${debVer}-1_amd64.deb`,
     `update.json`,
   ];
+}
+
+// 从 git remote 解析 owner/repo（避免硬编码）
+function gitRepo() {
+  try {
+    const url = sh('git', ['remote', 'get-url', 'origin']).trim();
+    // ssh://git@ssh.github.com:443/icecome/Flore.git 或 https://github.com/icecome/Flore.git
+    const m = url.match(/[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+    if (!m) throw new Error(`无法解析 git remote: ${url}`);
+    return `${m[1]}/${m[2]}`;
+  } catch (e) {
+    console.error(`错误: 无法从 git remote 解析 owner/repo: ${e.message}`);
+    exit(1);
+  }
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -105,11 +120,19 @@ try {
 }
 
 // 获取当前 release assets
+// 用 gh api 调 REST API（避免 gh release view --json 在某些版本下把 id 字段映射为 node_id 字符串
+// 导致 delete-asset 报 "not found"）
 console.log(`>>> 读取 release 现有 assets ...`);
-const release = ghJson(['release', 'view', args.tag, '--json', 'id,assets']);
-const existing = release.assets || [];
+const repo = gitRepo();
+const release = ghJson(['api', `repos/${repo}/releases/tags/${args.tag}`]);
+const existing = (release.assets || []).map((a) => ({
+  id: a.id,
+  name: a.name,
+  nodeId: a.node_id,
+}));
 console.log(`    共 ${existing.length} 个 assets:`);
-for (const a of existing) console.log(`    - ${a.name} (id=${a.id})`);
+for (const a of existing)
+  console.log(`    - ${a.name} (id=${a.id}, node_id=${a.nodeId})`);
 
 // 校验期望 assets 都在
 const missing = order.filter((n) => !existing.some((a) => a.name === n));
@@ -140,11 +163,20 @@ if (args.fromLocal) {
   }
 }
 
-// 删除现有 assets
+// 删除现有 assets（用 REST API 数字 id；若已不存在则跳过，支持幂等重跑）
 console.log(`>>> 删除现有 assets ...`);
 for (const a of existing) {
   console.log(`    - ${a.name} (id=${a.id})`);
-  sh('gh', ['release', 'delete-asset', args.tag, String(a.id)]);
+  try {
+    sh('gh', ['api', '--method=DELETE', `repos/${repo}/releases/assets/${a.id}`]);
+  } catch (e) {
+    const stderr = (e.stderr || e.message || '').toString();
+    if (stderr.includes('404') || /not found/i.test(stderr)) {
+      console.log(`      (已不存在，跳过)`);
+      continue;
+    }
+    throw e;
+  }
 }
 
 // 按期望顺序串行上传

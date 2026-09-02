@@ -262,7 +262,7 @@ jobs:
           }
           check "flore-portable-windows-amd64-${V}.zip" 35 "Windows 便携 zip"
           check "flore-setup-windows-amd64-${V}.exe"   45 "Windows 安装 exe"
-          check "flore_${DEB_VER}-1_amd64.deb"         40 "Linux deb"
+          check "flore-setup_${DEB_VER}-1_amd64.deb"  40 "Linux deb"
           if [ -f "flore-setup-darwin-arm64-${V}.dmg" ]; then
             echo "  macOS dmg: $(du -m "flore-setup-darwin-arm64-${V}.dmg" | cut -f1)MB (仅观察)"
           fi
@@ -353,7 +353,7 @@ jobs:
             "apps/desktop/build/flore-portable-darwin-arm64-${V}.zip"
             "apps/desktop/build/flore-setup-windows-amd64-${V}.exe"
             "apps/desktop/build/flore-portable-windows-amd64-${V}.zip"
-            "apps/desktop/build/flore_${DEB_VER}-1_amd64.deb"
+            "apps/desktop/build/flore-setup_${DEB_VER}-1_amd64.deb"
             "apps/desktop/build/update.json"
           )
           for f in "${ASSETS[@]}"; do

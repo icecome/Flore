@@ -228,9 +228,11 @@ func buildDeb(version, osArg, arch, binDir, outDir, appName, feBin *string) {
 		fatal("创建目录失败: %v", err)
 	}
 	debVer := strings.ReplaceAll(*version, "-", ".")
-	// Debian 包名规范要求小写，且与 zip/exe 产物命名保持一致；
-	// 可执行文件名仍用原始大小写（Flore）。
-	debPkg := strings.ToLower(*appName)
+	// Debian 包名规范：<pkg>_<ver>-<rev>_<arch>.deb，包名必须小写且只能含
+	// [a-z0-9.+-]。这里包名固定为 "flore-setup"，与 release 列表的
+	// setup/portable 分组对齐（dmg/exe 也属于 setup 类）。
+	// 可执行文件名 / .desktop 的 Name/Exec/Icon 仍用原始大小写（Flore）。
+	debPkg := "flore-setup"
 	controlContent := fmt.Sprintf(
 		"Package: %s\nVersion: %s-1\nSection: utils\nPriority: optional\nArchitecture: %s\nMaintainer: Lice <werrice@outlook.com>\nDescription: %s RSS Reader\n",
 		debPkg, debVer, *arch, *appName,
