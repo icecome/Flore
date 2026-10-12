@@ -53,7 +53,7 @@ export function useFetchOrchestration({
       await triggerFetch(scope);
     } catch (err) {
       console.error('Failed to fetch:', err);
-      showToast('触发抓取失败，请稍后重试');
+      showToast('触发抓取失败，请稍后重试', 'error');
       setRefreshing(false);
     }
   }, []);
@@ -102,7 +102,7 @@ export function useFetchOrchestration({
         console.error('Failed to poll fetch status:', err);
         pollFailRef.current += 1;
         if (pollFailRef.current === POLL_FAIL_LIMIT) {
-          showToast('无法获取抓取进度，请检查后端服务');
+          showToast('无法获取抓取进度，请检查后端服务', 'error');
         }
       }
       if (cancelled) return;

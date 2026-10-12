@@ -22,13 +22,7 @@ type SyncConfig struct {
 	// WebDAV 凭证
 	FileUsername string `json:"fileUsername"`
 	FilePassword string `json:"filePassword"` // 脱敏返回
-	// S3 凭证
-	FileEndpoint  string `json:"fileEndpoint"`
-	FileRegion    string `json:"fileRegion"`
-	FileBucket    string `json:"fileBucket"`
-	FileAccessKey string `json:"fileAccessKey"`
-	FileSecretKey string `json:"fileSecretKey"` // 脱敏返回
-	FilePrefix    string `json:"filePrefix"`
+	FilePrefix   string `json:"filePrefix"`
 
 	WindowDays   int `json:"windowDays"`
 	PullInterval int `json:"pullInterval"` // 秒
@@ -36,11 +30,9 @@ type SyncConfig struct {
 
 // syncSensitiveKeys 敏感配置键（脱敏返回 + 前端回传掩码值时保留原值）
 var syncSensitiveKeys = map[string]bool{
-	"sync_api_password":    true,
-	"sync_api_token":       true,
-	"sync_file_password":   true,
-	"sync_file_access_key": true,
-	"sync_file_secret_key": true,
+	"sync_api_password":  true,
+	"sync_api_token":     true,
+	"sync_file_password": true,
 }
 
 // syncAPIProviders 允许的 API provider（仅收录已实现的枚举）
@@ -49,34 +41,30 @@ var syncAPIProviders = map[string]bool{
 	sync.ProviderGReader:  true,
 }
 
-// syncFileProviders 允许的文件 provider（P3 交付，预留枚举）
+// syncFileProviders 允许的文件 provider。
+// 只登记已实现的 provider：未实现的后端不应出现在允许列表里，
+// 否则前端会提供一条填完凭证也永远无法工作的配置路径。
 var syncFileProviders = map[string]bool{
 	"webdav": true,
-	"s3":     true,
 }
 
 // GetSyncConfig 读取同步配置，敏感字段脱敏（**** + 尾 4 位，不足 4 位全掩码）
 func (s *ReaderService) GetSyncConfig() *SyncConfig {
 	return &SyncConfig{
-		APIEnabled:    s.GetSettingBool("sync_api_enabled", false),
-		APIProvider:   s.GetSetting("sync_api_provider"),
-		APIEndpoint:   s.GetSetting("sync_api_endpoint"),
-		APIUsername:   s.GetSetting("sync_api_username"),
-		APIPassword:   maskSecret(s.GetSetting("sync_api_password")),
-		APIToken:      maskSecret(s.GetSetting("sync_api_token")),
-		FileEnabled:   s.GetSettingBool("sync_file_enabled", false),
-		FileProvider:  s.GetSetting("sync_file_provider"),
-		FileURL:       s.GetSetting("sync_file_url"),
-		FileUsername:  s.GetSetting("sync_file_username"),
-		FilePassword:  maskSecret(s.GetSetting("sync_file_password")),
-		FileEndpoint:  s.GetSetting("sync_file_endpoint"),
-		FileRegion:    s.GetSetting("sync_file_region"),
-		FileBucket:    s.GetSetting("sync_file_bucket"),
-		FileAccessKey: maskSecret(s.GetSetting("sync_file_access_key")),
-		FileSecretKey: maskSecret(s.GetSetting("sync_file_secret_key")),
-		FilePrefix:    s.GetSetting("sync_file_prefix"),
-		WindowDays:    s.GetSettingInt("sync_window_days", 30),
-		PullInterval:  s.GetSettingInt("sync_pull_interval", 300),
+		APIEnabled:   s.GetSettingBool("sync_api_enabled", false),
+		APIProvider:  s.GetSetting("sync_api_provider"),
+		APIEndpoint:  s.GetSetting("sync_api_endpoint"),
+		APIUsername:  s.GetSetting("sync_api_username"),
+		APIPassword:  maskSecret(s.GetSetting("sync_api_password")),
+		APIToken:     maskSecret(s.GetSetting("sync_api_token")),
+		FileEnabled:  s.GetSettingBool("sync_file_enabled", false),
+		FileProvider: s.GetSetting("sync_file_provider"),
+		FileURL:      s.GetSetting("sync_file_url"),
+		FileUsername: s.GetSetting("sync_file_username"),
+		FilePassword: maskSecret(s.GetSetting("sync_file_password")),
+		FilePrefix:   s.GetSetting("sync_file_prefix"),
+		WindowDays:   s.GetSettingInt("sync_window_days", 30),
+		PullInterval: s.GetSettingInt("sync_pull_interval", 300),
 	}
 }
 
@@ -95,8 +83,8 @@ func (s *ReaderService) UpdateSyncConfig(values map[string]string) error {
 		return fmt.Errorf("unsupported file provider: %s", v)
 	}
 
-	// 校验 endpoint（API / WebDAV / S3），防 SSRF 跳板
-	for _, key := range []string{"sync_api_endpoint", "sync_file_url", "sync_file_endpoint"} {
+	// 校验 endpoint（API / WebDAV），防 SSRF 跳板
+	for _, key := range []string{"sync_api_endpoint", "sync_file_url"} {
 		if v, ok := values[key]; ok && v != "" {
 			if err := ValidateURL(v); err != nil {
 				return fmt.Errorf("invalid %s: %w", key, err)

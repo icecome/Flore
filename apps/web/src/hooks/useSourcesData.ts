@@ -36,7 +36,7 @@ export function useSourcesData(
       setFolders(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch folders:', err);
-      showToast('获取文件夹列表失败');
+      showToast('获取文件夹列表失败', 'error');
     }
   }, []);
 
@@ -48,7 +48,7 @@ export function useSourcesData(
       setSources(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch sources:', err);
-      showToast('获取订阅源列表失败');
+      showToast('获取订阅源列表失败', 'error');
     } finally {
       setLoadingSources(false);
     }
@@ -71,7 +71,7 @@ export function useSourcesData(
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch unread count:', err);
-      showToast('获取未读数失败');
+      showToast('获取未读数失败', 'error');
     }
   }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline]);
 
@@ -93,7 +93,7 @@ export function useSourcesData(
     healthCheckedRef.current = true;
     const badCount = sources.filter((s) => s.fetchFailCount >= 3).length;
     if (badCount > 0) {
-      showToast(`${badCount} 个订阅源异常，请在设置中查看详情`);
+      showToast(`${badCount} 个订阅源异常，请在设置中查看详情`, 'error');
     }
   }, [sources]);
 

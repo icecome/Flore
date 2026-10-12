@@ -108,7 +108,7 @@ export default function ImportOPMLModal({ onClose, onImport }: Props) {
               ));
             }}
             className="w-full px-3 py-[10px] border border-border rounded-sm text-sm font-mono box-border resize-vertical bg-surface text-primary"
-            placeholder="粘贴 OPML XML 内容..."
+            placeholder="粘贴 OPML XML 内容"
             rows={10}
           />
         </div>
@@ -117,7 +117,7 @@ export default function ImportOPMLModal({ onClose, onImport }: Props) {
 
         <div className="flex justify-end gap-3">
           <Button variant="secondary" onClick={onClose}>取消</Button>
-          <Button variant="primary" type="submit" disabled={loading}>{loading ? '导入中...' : '导入'}</Button>
+          <Button variant="primary" type="submit" disabled={loading}>{loading ? '导入中……' : '导入'}</Button>
         </div>
       </form>
     </ModalLayout>

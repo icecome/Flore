@@ -141,7 +141,7 @@ function useWindowState() {
       }
     } catch (err) {
       console.error(`TitleBar ${method} failed:`, err);
-      showToast('窗口操作失败');
+      showToast('窗口操作失败', 'error');
     }
   }, []);
 

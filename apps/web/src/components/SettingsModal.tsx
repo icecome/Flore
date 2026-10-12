@@ -3,12 +3,9 @@ import { useFocusTrap } from './ModalLayout';
 import {
   Settings as SettingsIcon,
   X,
-  Sun,
-  Moon,
   Rss,
   Info,
   Filter,
-  Monitor,
   Database,
   Palette,
   Bell,
@@ -17,21 +14,7 @@ import {
   RefreshCw,
 } from './icons';
 import { cn } from '../lib/cn';
-import {
-  type AppSettings,
-  type MarkReadMode,
-  type ListDensity,
-  type ListSortOrder,
-  type ListDateFormat,
-  THEME_OPTIONS,
-  LETTER_SPACING_OPTIONS,
-  ACCENT_PRESETS,
-  MARK_READ_OPTIONS,
-  LIST_DENSITY_OPTIONS,
-  LIST_SORT_OPTIONS,
-  LIST_DATE_FORMAT_OPTIONS,
-  applyAccentColor,
-} from '../utils/settings';
+import type { AppSettings } from '../utils/settings';
 import type { Source, Folder, FilterRule, FilterCondition } from '../types';
 import {
   getDesktopApp,
@@ -47,10 +30,12 @@ import {
   deleteFilterRule,
 } from '../utils/api';
 import { showToast } from '../utils/toast';
+import { translateBackendError } from '../utils/backendError';
 import ConfirmDialog from './ConfirmDialog';
-import { Section, Row, Toggle, Select, Slider } from './settings/SettingsShared';
-import SettingsSourcesTab from './settings/SettingsSourcesTab';
 import EditSourceModal from './EditSourceModal';
+import SettingsGeneralTab from './settings/SettingsGeneralTab';
+import SettingsAppearanceTab from './settings/SettingsAppearanceTab';
+import SettingsSourcesTab from './settings/SettingsSourcesTab';
 import SettingsRulesTab, { type RuleFormState } from './settings/SettingsRulesTab';
 import SettingsAboutTab from './settings/SettingsAboutTab';
 import SettingsDataTab from './settings/SettingsDataTab';
@@ -60,7 +45,6 @@ import SettingsSyncTab from './settings/SettingsSyncTab';
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab';
 
 export type TabId = 'general' | 'appearance' | 'sources' | 'rules' | 'data' | 'notify' | 'network' | 'sync' | 'shortcuts' | 'about';
-type Theme = 'light' | 'dark' | 'system';
 
 interface Props {
   settings: AppSettings;
@@ -87,42 +71,8 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'about', label: '关于', icon: <Info size={17} /> },
 ];
 
-const FONT_FAMILY_OPTIONS: { value: AppSettings['readerFontFamily']; label: string }[] = [
-  { value: 'serif', label: '衬线体' },
-  { value: 'sans', label: '无衬线体' },
-  { value: 'mono', label: '等宽字体' },
-];
-
-const INTERVAL_OPTIONS: { value: number; label: string }[] = [
-  { value: 30, label: '30 分钟' },
-  { value: 60, label: '1 小时' },
-  { value: 120, label: '2 小时' },
-  { value: 180, label: '3 小时' },
-  { value: 360, label: '6 小时' },
-  { value: 720, label: '12 小时' },
-  { value: 1440, label: '24 小时' },
-];
-
-// 首次抓取时间窗口选项（T-v02-02）：0=全部
-const INITIAL_FETCH_WINDOW_OPTIONS: { value: number; label: string }[] = [
-  { value: 7, label: '最近 7 天' },
-  { value: 30, label: '最近 30 天' },
-  { value: 0, label: '全部历史' },
-];
-
-const OPEN_MODE_OPTIONS: { value: AppSettings['openArticleMode']; label: string }[] = [
-  { value: 'rss', label: '原文模式' },
-  { value: 'readability', label: '全文模式' },
-  { value: 'iframe', label: '网页模式' },
-  { value: 'browser', label: '浏览器打开' },
-];
-
 export default function SettingsModal({ settings, onSettingsChange, onClose, onSourcesChanged, onAddSource, sources, folders, initialTab }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'general');
-  const [theme, setTheme] = useState<Theme>(() => {
-    // 用 AppSettings.appTheme 初始化，避免弹窗内状态与全局不一致
-    return (settings.appTheme === 'light' || settings.appTheme === 'dark') ? settings.appTheme : 'system';
-  });
   const [sourceFilter, setSourceFilter] = useState<'all' | 'ok' | 'bad'>('all');
   const [selectedSourceIds, setSelectedSourceIds] = useState<number[]>([]);
   const [isChecking, setIsChecking] = useState(false);
@@ -144,17 +94,6 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
   // 焦点陷阱 + Esc 关闭（与 ModalLayout 同源，保证可访问性一致）
   const dialogRef = useFocusTrap(onClose);
 
-  useEffect(() => {
-    // 隐私模式下访问 localStorage 可能抛错，读失败时回退到跟随系统
-    try {
-      const saved = localStorage.getItem('theme');
-      setTheme(saved === 'light' || saved === 'dark' ? saved : 'system');
-    } catch (err) {
-      console.error('Failed to read theme from localStorage:', err);
-      setTheme('system');
-    }
-  }, []);
-
   useEffect(() => { fetchRules(); }, []);
 
   // 单一数据源：sources/folders 直接消费 App 全局 prop，不再持有本地副本。
@@ -171,31 +110,12 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       setRules(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to fetch filter rules:', err);
-      showToast('获取过滤规则失败');
+      showToast('获取过滤规则失败', 'error');
     }
   };
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     onSettingsChange({ ...settings, [key]: value });
-  };
-
-  const applyTheme = (value: Theme) => {
-    setTheme(value);
-    // 主题持久化失败不应阻断当前会话的视觉切换
-    try {
-      if (value === 'system') localStorage.removeItem('theme');
-      else localStorage.setItem('theme', value);
-    } catch (err) {
-      console.error('Failed to persist theme to localStorage:', err);
-    }
-    if (value === 'system') {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-      updateSetting('appTheme', 'system');
-    } else {
-      document.documentElement.setAttribute('data-theme', value);
-      updateSetting('appTheme', value);
-    }
   };
 
   const filteredSources = sources.filter((s) => {
@@ -243,20 +163,20 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       await deleteSourcesBatch(ids);
       setSelectedSourceIds([]);
       onSourcesChanged?.();
-      showToast('已删除订阅源');
+      showToast('已删除订阅源', 'success');
     } catch (err) {
       console.error('Failed to delete sources:', err);
-      showToast('删除失败');
+      showToast('删除失败', 'error');
     }
   };
 
   const notifyHideResult = (failedCount: number, total: number) => {
     if (failedCount === 0) {
-      showToast('已在全部文章隐藏');
+      showToast('已从时间线隐藏该订阅源', 'success');
     } else if (failedCount === total) {
-      showToast('设置失败');
+      showToast('设置失败', 'error');
     } else {
-      showToast(`部分设置失败（${failedCount}/${total}）`);
+      showToast(`部分设置失败（${failedCount}/${total}）`, 'error');
     }
   };
 
@@ -283,11 +203,11 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     setSelectedSourceIds([]);
     onSourcesChanged?.();
     if (failed === 0) {
-      showToast(folderId == null ? '已移出文件夹' : '已移动到目标文件夹');
+      showToast(folderId == null ? '已移出文件夹' : '已移动到目标文件夹', 'success');
     } else if (failed === ids.length) {
-      showToast('移动失败');
+      showToast('移动失败', 'error');
     } else {
-      showToast(`部分移动失败（${failed}/${ids.length}）`);
+      showToast(`部分移动失败（${failed}/${ids.length}）`, 'error');
     }
   };
 
@@ -295,10 +215,10 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     try {
       await updateSource(source.id, { hideInTimeline: !source.hideInTimeline });
       onSourcesChanged?.();
-      showToast(source.hideInTimeline ? '已在全部文章显示' : '已在全部文章隐藏');
+      showToast(source.hideInTimeline ? '已恢复在时间线显示' : '已从时间线隐藏', 'success');
     } catch (err) {
       console.error('Failed to toggle hide source:', err);
-      showToast('操作失败');
+      showToast('操作失败', 'error');
     }
   };
 
@@ -320,10 +240,10 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       });
       setEditTarget(null);
       onSourcesChanged?.();
-      showToast('订阅源已更新');
+      showToast('订阅源已更新', 'success');
     } catch (err) {
       console.error('Failed to edit source:', err);
-      showToast('编辑订阅源失败');
+      showToast('编辑订阅源失败', 'error');
     }
   };
 
@@ -376,12 +296,12 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
   const retrySource = async (sourceId: number) => {
     try {
       await triggerFetch({ sourceId });
-      showToast('已提交重试，稍后自动刷新状态');
+      showToast('已提交重试，稍后自动刷新状态', 'success');
       // 抓取为后台异步执行，延迟刷新以呈现最新健康状态
       setTimeout(() => { onSourcesChanged?.(); }, 3000);
     } catch (err) {
       console.error('Failed to retry source:', err);
-      showToast('重试失败');
+      showToast('重试失败', 'error');
     }
   };
 
@@ -389,11 +309,11 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     try {
       const text = typeof fileOrXml === 'string' ? fileOrXml : await fileOrXml.text();
       await importOPMLApi(text);
-      showToast('OPML 导入成功');
+      showToast('OPML 导入成功', 'success');
       onSourcesChanged?.();
     } catch (err) {
       console.error('Failed to import OPML:', err);
-      showToast(err instanceof Error && err.message ? `OPML 导入失败：${err.message}` : 'OPML 导入失败');
+      showToast('OPML 导入失败：' + (translateBackendError(err instanceof Error ? err.message : '') ?? '未知原因'), 'error');
     }
   };
 
@@ -407,17 +327,17 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       await downloadBlob('/opml/export', 'subscriptions.opml');
     } catch (err) {
       console.error('Failed to export OPML:', err);
-      showToast('导出失败');
+      showToast('导出失败', 'error');
     }
   };
 
   const importDatabase = async (file: File) => {
     try {
       await restoreDatabase(file);
-      showToast('数据库恢复成功，请重启应用');
+      showToast('数据库恢复成功，请重启应用', 'success');
     } catch (err) {
       console.error('Failed to restore database:', err);
-      showToast('数据库恢复失败');
+      showToast('数据库恢复失败', 'error');
     }
   };
 
@@ -431,22 +351,22 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       window.location.href = getDatabaseExportUrl();
     } catch (err) {
       console.error('Failed to export database:', err);
-      showToast('导出失败');
+      showToast('导出失败', 'error');
     }
   };
 
   const restartApp = async () => {
     const app = getDesktopApp();
     if (!app?.RestartApp) {
-      showToast('当前环境不支持重启');
+      showToast('当前环境不支持重启', 'error');
       return;
     }
     try {
       await app.RestartApp();
-      showToast('正在重启应用...');
+      showToast('正在重启应用……');
     } catch (err) {
       console.error('Failed to restart app:', err);
-      showToast('重启失败');
+      showToast('重启失败', 'error');
     }
   };
 
@@ -481,11 +401,11 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
 
   const validateRuleForm = (): FilterRule['conditions'] | null => {
     const name = ruleForm.name.trim();
-    if (!name) { showToast('请填写规则名称'); return null; }
+    if (!name) { showToast('请填写规则名称', 'error'); return null; }
     const validConditions = ruleForm.conditions.filter((c) => c.value.trim());
-    if (validConditions.length === 0) { showToast('请至少添加一个有效的匹配条件'); return null; }
-    if (ruleForm.scope === 'source' && ruleForm.sourceId == null) { showToast('请选择订阅源'); return null; }
-    if (ruleForm.scope === 'folder' && ruleForm.folderId == null) { showToast('请选择文件夹'); return null; }
+    if (validConditions.length === 0) { showToast('请至少添加一个有效的匹配条件', 'error'); return null; }
+    if (ruleForm.scope === 'source' && ruleForm.sourceId == null) { showToast('请选择订阅源', 'error'); return null; }
+    if (ruleForm.scope === 'folder' && ruleForm.folderId == null) { showToast('请选择文件夹', 'error'); return null; }
     return validConditions as FilterCondition[];
   };
 
@@ -509,10 +429,10 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       await saveFilterRule(editingRuleId, body);
       await fetchRules();
       resetRuleForm();
-      showToast('规则已保存');
+      showToast('规则已保存', 'success');
     } catch (err) {
       console.error('Failed to save filter rule:', err);
-      showToast('保存失败');
+      showToast('保存失败', 'error');
     }
   };
 
@@ -530,10 +450,10 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     try {
       await saveFilterRule(rule.id, body);
       await fetchRules();
-      showToast('状态已更新');
+      showToast('状态已更新', 'success');
     } catch (err) {
       console.error('Failed to toggle filter rule:', err);
-      showToast('更新失败');
+      showToast('更新失败', 'error');
     }
   };
 
@@ -548,337 +468,20 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
     try {
       await deleteFilterRule(id);
       await fetchRules();
-      showToast('规则已删除');
+      showToast('规则已删除', 'success');
     } catch (err) {
       console.error('Failed to delete filter rule:', err);
-      showToast('删除失败');
+      showToast('删除失败', 'error');
     }
   };
 
   const renderTab = () => {
     switch (activeTab) {
       case 'general':
-        return (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <Section title="时间线行为">
-              <Row
-                title="启动时仅显示未读"
-                desc="应用启动时默认只显示未读内容。"
-                control={
-                  <Toggle
-                    checked={settings.unreadOnStart}
-                    onChange={(v) => updateSetting('unreadOnStart', v)}
-                  />
-                }
-              />
-              <Row
-                title="淡化已读条目"
-                desc="在时间线中降低已读条目的显示颜色。"
-                control={
-                  <Toggle checked={settings.dimRead} onChange={(v) => updateSetting('dimRead', v)} />
-                }
-              />
-              <Row
-                title="侧边栏隐藏私密订阅"
-                desc="开启后，侧边栏隐藏标记为私密的订阅。"
-                control={
-                  <Toggle
-                    checked={settings.hidePrivateInSidebar}
-                    onChange={(v) => updateSetting('hidePrivateInSidebar', v)}
-                  />
-                }
-              />
-              <Row
-                title="时间线隐藏私密文章"
-                desc="开启后，时间线隐藏私密订阅的文章。"
-                control={
-                  <Toggle
-                    checked={settings.hidePrivateInTimeline}
-                    onChange={(v) => updateSetting('hidePrivateInTimeline', v)}
-                  />
-                }
-              />
-              <Row
-                title="隐藏已读源"
-                desc="在订阅列表中隐藏没有未读条目的订阅源。"
-                control={
-                  <Toggle checked={settings.hideRead} onChange={(v) => updateSetting('hideRead', v)} />
-                }
-              />
-            </Section>
-
-            <Section title="自动标记已读">
-              <Row
-                title="标记方式"
-                desc="选择自动标记文章为已读的触发方式。"
-                control={
-                  <Select
-                    value={settings.markReadMode}
-                    options={MARK_READ_OPTIONS}
-                    onChange={(v) => updateSetting('markReadMode', v as MarkReadMode)}
-                  />
-                }
-              />
-              {settings.markReadMode === 'hover' && (
-                <Row
-                  title="悬停延迟"
-                  desc="鼠标悬停多久后标记为已读。"
-                  control={
-                    <Slider
-                      value={settings.markReadHoverDelay}
-                      min={200}
-                      max={3000}
-                      step={100}
-                      unit="ms"
-                      onChange={(v) => updateSetting('markReadHoverDelay', v)}
-                    />
-                  }
-                />
-              )}
-            </Section>
-
-            <Section title="文章列表偏好">
-              <Row
-                title="显示密度"
-                desc="调整文章列表的行间距。"
-                control={
-                  <Select
-                    value={settings.listDensity}
-                    options={LIST_DENSITY_OPTIONS}
-                    onChange={(v) => updateSetting('listDensity', v as ListDensity)}
-                  />
-                }
-              />
-              <Row
-                title="排序方式"
-                desc="文章列表的默认排序。"
-                control={
-                  <Select
-                    value={settings.listSortOrder}
-                    options={LIST_SORT_OPTIONS}
-                    onChange={(v) => updateSetting('listSortOrder', v as ListSortOrder)}
-                  />
-                }
-              />
-              <Row
-                title="显示摘要预览"
-                desc="在列表中显示文章摘要。"
-                control={
-                  <Toggle
-                    checked={settings.listShowPreview}
-                    onChange={(v) => updateSetting('listShowPreview', v)}
-                  />
-                }
-              />
-              <Row
-                title="日期格式"
-                desc="文章时间的显示格式。"
-                control={
-                  <Select
-                    value={settings.listDateFormat}
-                    options={LIST_DATE_FORMAT_OPTIONS}
-                    onChange={(v) => updateSetting('listDateFormat', v as ListDateFormat)}
-                  />
-                }
-              />
-            </Section>
-
-            <Section title="抓取与同步">
-              <Row
-                title="自动抓取周期"
-                desc="所有订阅源按此周期统一轮询更新；未变化的源会通过 304 协商自动跳过，不会重复抓取。"
-                control={
-                  <Select
-                    value={settings.defaultInterval}
-                    options={INTERVAL_OPTIONS}
-                    onChange={(v) => updateSetting('defaultInterval', Number(v))}
-                  />
-                }
-              />
-              <Row
-                title="首次抓取范围"
-                desc="新订阅源首次抓取时，只回填指定天数内的文章，避免历史文章淹没列表。"
-                control={
-                  <Select
-                    value={settings.initialFetchWindowDays}
-                    options={INITIAL_FETCH_WINDOW_OPTIONS}
-                    onChange={(v) => updateSetting('initialFetchWindowDays', Number(v))}
-                  />
-                }
-              />
-              <Row
-                title="启动时自动抓取"
-                desc="应用启动后立即执行一次抓取。"
-                control={
-                  <Toggle
-                    checked={settings.autoFetchOnStart}
-                    onChange={(v) => updateSetting('autoFetchOnStart', v)}
-                  />
-                }
-              />
-            </Section>
-
-            <Section title="文章打开方式">
-              <Row
-                title="默认打开方式"
-                desc="点击文章时默认使用的打开方式。"
-                control={
-                  <Select
-                    value={settings.openArticleMode}
-                    options={OPEN_MODE_OPTIONS}
-                    onChange={(v) =>
-                      updateSetting('openArticleMode', v as AppSettings['openArticleMode'])
-                    }
-                  />
-                }
-              />
-            </Section>
-
-            <Section title="自动分组">
-              <Row
-                title="按域名自动分组"
-                desc="创建新订阅源时自动按网站域名生成文件夹。"
-                control={
-                  <Toggle
-                    checked={settings.autoGroup}
-                    onChange={(v) => updateSetting('autoGroup', v)}
-                  />
-                }
-              />
-            </Section>
-          </div>
-        );
+        return <SettingsGeneralTab settings={settings} updateSetting={updateSetting} />;
 
       case 'appearance':
-        return (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <Section title="主题">
-              <Row
-                title="主题"
-                desc="选择应用的整体外观。"
-                control={<ThemeSelector theme={theme} onChange={applyTheme} />}
-              />
-            </Section>
-            <Section title="强调色">
-              <Row
-                title="强调色"
-                desc="自定义应用的强调色，影响按钮、选中态、链接等。"
-                control={
-                  <div className="flex items-center gap-1.5">
-                    {ACCENT_PRESETS.map((preset) => (
-                      <button
-                        key={preset.color}
-                        onClick={() => {
-                          updateSetting('accentColor', preset.color);
-                          applyAccentColor(preset.color);
-                        }}
-                        className={cn(
-                          'h-7 w-7 rounded-md border-2 transition-transform hover:scale-110',
-                          (settings.accentColor || '#7B68EE') === preset.color
-                            ? 'border-text-primary scale-110'
-                            : 'border-transparent'
-                        )}
-                        style={{ backgroundColor: preset.color }}
-                        title={preset.name}
-                      />
-                    ))}
-                    <label
-                      className="relative flex h-7 w-7 cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-border transition-colors hover:border-border-strong"
-                      title="自定义颜色"
-                    >
-                      <input
-                        type="color"
-                        value={settings.accentColor || '#7B68EE'}
-                        onInput={(e) => {
-                          applyAccentColor((e.target as HTMLInputElement).value);
-                        }}
-                        onChange={(e) => {
-                          updateSetting('accentColor', e.target.value);
-                        }}
-                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                      />
-                      <span className="text-[10px] text-muted">+</span>
-                    </label>
-                  </div>
-                }
-              />
-            </Section>
-            <Section title="排版设置">
-              <Row
-                title="默认字体"
-                control={
-                  <Select
-                    value={settings.readerFontFamily}
-                    options={FONT_FAMILY_OPTIONS}
-                    onChange={(v) =>
-                      updateSetting('readerFontFamily', v as AppSettings['readerFontFamily'])
-                    }
-                  />
-                }
-              />
-              <Row
-                title="默认字号"
-                control={
-                  <Slider
-                    value={settings.readerFontSize}
-                    min={14}
-                    max={24}
-                    step={1}
-                    unit="px"
-                    onChange={(v) => updateSetting('readerFontSize', v)}
-                  />
-                }
-              />
-              <Row
-                title="默认行高"
-                control={
-                  <Slider
-                    value={settings.readerLineHeight}
-                    min={1.2}
-                    max={2.4}
-                    step={0.05}
-                    onChange={(v) => updateSetting('readerLineHeight', v)}
-                  />
-                }
-              />
-              <Row
-                title="最大宽度"
-                control={
-                  <Slider
-                    value={settings.readerMaxWidth}
-                    min={500}
-                    max={1000}
-                    step={10}
-                    unit="px"
-                    onChange={(v) => updateSetting('readerMaxWidth', v)}
-                  />
-                }
-              />
-              <Row
-                title="字间距"
-                control={
-                  <Select
-                    value={settings.readerLetterSpacing}
-                    options={LETTER_SPACING_OPTIONS}
-                    onChange={(v) =>
-                      updateSetting('readerLetterSpacing', v as AppSettings['readerLetterSpacing'])
-                    }
-                  />
-                }
-              />
-              <Row
-                title="阅读主题"
-                control={
-                  <Select
-                    value={settings.readerTheme}
-                    options={THEME_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-                    onChange={(v) => updateSetting('readerTheme', v as AppSettings['readerTheme'])}
-                  />
-                }
-              />
-            </Section>
-          </div>
-        );
+        return <SettingsAppearanceTab settings={settings} updateSetting={updateSetting} />;
 
       case 'sources':
         return (
@@ -1050,30 +653,3 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
   );
 }
 
-function ThemeSelector({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
-  const opts: { value: Theme; label: string; icon: React.ReactNode }[] = [
-    { value: 'light', label: '浅色', icon: <Sun size={14} /> },
-    { value: 'dark', label: '深色', icon: <Moon size={14} /> },
-    { value: 'system', label: '跟随系统', icon: <Monitor size={14} /> },
-  ];
-
-  return (
-    <div className="flex gap-1.5">
-      {opts.map((o) => (
-        <button
-          key={o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] transition-colors',
-            theme === o.value
-              ? 'border-primary bg-primary-subtle text-primary'
-              : 'border-border text-secondary hover:border-border-strong hover:text-primary'
-          )}
-        >
-          {o.icon}
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}

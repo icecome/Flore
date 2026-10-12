@@ -26,6 +26,20 @@ func (a *App) getNotifyEnabled() bool {
 	return a.notifyEnabled
 }
 
+// getTrayEnabled 读取托盘开关（纯缓存，永不同步 HTTP）。
+func (a *App) getTrayEnabled() bool {
+	a.settingsMutex.Lock()
+	defer a.settingsMutex.Unlock()
+	return a.trayEnabled
+}
+
+// trayUsable 报告当前是否有可用的托盘入口。
+// 托盘关闭或系统不支持托盘时返回 false，窗口行为必须退回到任务栏，
+// 否则「关闭/最小化到托盘」会让用户既看不到窗口也找不到恢复入口。
+func (a *App) trayUsable() bool {
+	return a.getTrayEnabled() && a.trayAvailable()
+}
+
 // fetchSettingValue 从后端获取单个设置项的值，成功时返回 (value, true)。
 func (a *App) fetchSettingValue(key string, port int) (string, bool) {
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/settings/%s", port, key)
@@ -69,7 +83,8 @@ func (a *App) loadWindowSettings() {
 		minimize, okMinimize := a.fetchSettingValue("minimizeBehavior", port)
 		closeBeh, okClose := a.fetchSettingValue("closeBehavior", port)
 		notify, okNotify := a.fetchSettingValue("notifyEnabled", port)
-		if !okMinimize && !okClose && !okNotify {
+		tray, okTray := a.fetchSettingValue("trayEnabled", port)
+		if !okMinimize && !okClose && !okNotify && !okTray {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -82,6 +97,9 @@ func (a *App) loadWindowSettings() {
 		}
 		if okNotify {
 			a.notifyEnabled = notify == "true"
+		}
+		if okTray {
+			a.trayEnabled = tray == "true"
 		}
 		a.settingsMutex.Unlock()
 		return
@@ -104,8 +122,10 @@ func (a *App) getCloseBehavior() string {
 }
 
 // RefreshWindowSettings 供前端在修改窗口行为设置后调用，刷新桌面壳缓存。
+// 同步托盘开关：关闭托盘时立即移除托盘图标，避免「图标在、入口失」。
 func (a *App) RefreshWindowSettings() {
 	go a.loadWindowSettings()
+	go a.applyTraySetting()
 }
 
 // RestartApp 重启桌面应用。
@@ -147,14 +167,14 @@ func (a *App) RestartApp() error {
 
 // WindowMinimise 最小化窗口。
 // 根据用户配置的 minimizeBehavior 决定行为：
-// - "tray"：隐藏窗口（后台运行，需系统托盘支持）
+// - "tray"：隐藏窗口（后台运行，需系统托盘可用且已启用）
 // - "taskbar"（默认）：正常最小化到任务栏
 func (a *App) WindowMinimise() {
 	ctx := a.context()
 	if ctx == nil {
 		return
 	}
-	if a.trayAvailable() && a.getMinimizeBehavior() == "tray" {
+	if a.trayUsable() && a.getMinimizeBehavior() == "tray" {
 		wailsRuntime.WindowHide(ctx)
 		return
 	}
@@ -198,7 +218,7 @@ func (a *App) GetWindowState() WindowState {
 
 // WindowClose 关闭应用程序窗口。
 // 根据用户配置的 closeBehavior 决定行为：
-// - "tray"：隐藏窗口（后台运行，需系统托盘支持）
+// - "tray"：隐藏窗口（后台运行，需系统托盘可用且已启用）
 // - "quit"（默认）：退出应用
 func (a *App) WindowClose() {
 	ctx := a.context()
@@ -208,7 +228,7 @@ func (a *App) WindowClose() {
 	// C1 兜底：只有托盘确实可用时才允许隐藏，否则直接退出，
 	// 避免用户在托盘不可用时被锁死在「窗口已隐藏且无任何入口」的状态。
 	if a.getCloseBehavior() == "tray" {
-		if a.trayAvailable() {
+		if a.trayUsable() {
 			wailsRuntime.WindowHide(ctx)
 			return
 		}
@@ -218,7 +238,7 @@ func (a *App) WindowClose() {
 }
 
 // ShouldPreventClose 供 main.go 的 OnBeforeClose 回调使用。
-// 当 closeBehavior 为 "tray" 且系统托盘支持时阻止窗口关闭并隐藏，实现后台驻留。
+// 当 closeBehavior 为 "tray" 且系统托盘可用时阻止窗口关闭并隐藏，实现后台驻留。
 // 若 forceQuit 为 true（由托盘菜单"退出"触发），则跳过阻止，直接退出。
 // 注意：本方法运行在 Windows 主 UI 线程，只允许读缓存，禁止任何同步 HTTP（M2）。
 func (a *App) ShouldPreventClose() bool {
@@ -228,8 +248,8 @@ func (a *App) ShouldPreventClose() bool {
 	if a.getCloseBehavior() != "tray" {
 		return false
 	}
-	// C1 兜底：托盘不可用时不得阻止关闭，否则应用无法退出。
-	if !a.trayAvailable() {
+	// C1 兜底：托盘不可用或未启用时不得阻止关闭，否则应用无法退出。
+	if !a.trayUsable() {
 		a.logger.Printf("closeBehavior=tray but tray is unavailable, allowing close")
 		return false
 	}

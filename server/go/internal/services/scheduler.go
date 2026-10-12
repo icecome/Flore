@@ -175,7 +175,9 @@ func (sch *Scheduler) pollPeriodMinutes() int {
 	return 30
 }
 
-// maybeRunBackup 根据设置决定是否触发自动备份
+// maybeRunBackup 根据设置决定是否触发自动备份。
+// 首次运行（备份目录为空）时忽略间隔节流，立即建立首个备份：
+// 新用户当天就可能遇到磁盘故障，等待一个完整间隔意味着首日完全无保护。
 func (sch *Scheduler) maybeRunBackup() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -183,7 +185,7 @@ func (sch *Scheduler) maybeRunBackup() {
 		}
 	}()
 
-	if !sch.service.GetSettingBool("backupAutoEnabled", false) {
+	if !sch.service.GetSettingBool("backupAutoEnabled", true) {
 		return
 	}
 
@@ -196,7 +198,12 @@ func (sch *Scheduler) maybeRunBackup() {
 	sch.mu.Lock()
 	lastBackup := sch.lastBackupAt
 	sch.mu.Unlock()
+
+	// 间隔未到且已存在备份时跳过；没有任何备份时不受间隔限制。
 	if !lastBackup.IsZero() && now.Sub(lastBackup) < time.Duration(intervalMin)*time.Minute {
+		return
+	}
+	if lastBackup.IsZero() && sch.hasExistingBackup() {
 		return
 	}
 
@@ -209,7 +216,7 @@ func (sch *Scheduler) maybeRunBackup() {
 	sch.lastBackupAt = now
 	sch.mu.Unlock()
 	sch.persistLastBackupAt(now)
-	slog.Debug("scheduler: auto backup created", "name", name)
+	slog.Info("scheduler: auto backup created", "name", name)
 
 	// 清理过期备份
 	maxKeep := sch.service.GetSettingInt("backupMaxKeep", 10)
@@ -224,6 +231,17 @@ func (sch *Scheduler) maybeRunBackup() {
 	if err := sch.service.Vacuum(); err != nil {
 		slog.Warn("scheduler: auto vacuum failed", "error", err)
 	}
+}
+
+// hasExistingBackup 报告备份目录中是否已存在备份文件。
+// 查询失败时返回 true（视为已有备份），避免因统计错误反复触发整库备份。
+func (sch *Scheduler) hasExistingBackup() bool {
+	backups, err := sch.service.ListBackups()
+	if err != nil {
+		slog.Warn("scheduler: list backups failed, skip first-run backup", "error", err)
+		return true
+	}
+	return len(backups) > 0
 }
 
 // maybeRunRetention 根据设置决定是否触发文章清理

@@ -121,7 +121,7 @@ export default function SettingsRulesTab(props: Props) {
       setTestResults({ ruleName: rule.name, items: Array.isArray(items) ? items : [] });
     } catch (err) {
       console.error('Failed to test filter rule:', err);
-      showToast('规则测试失败');
+      showToast('规则测试失败', 'error');
     } finally {
       setTestingId(null);
     }

@@ -24,11 +24,11 @@ export default function OnboardingWelcome({ onImport, onAddSource, onSourcesChan
         interval: 30,
         listRule: 'show',
       });
-      showToast('已订阅「' + item.name + '」');
+      showToast('已订阅「' + item.name + '」', 'success');
       onSourcesChanged();
     } catch (err) {
       console.error('Failed to subscribe:', err);
-      showToast('订阅失败，请检查链接或稍后重试');
+      showToast('订阅失败，请检查链接或稍后重试', 'error');
     } finally {
       setSubscribing(null);
     }

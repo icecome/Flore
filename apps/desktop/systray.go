@@ -157,6 +157,16 @@ func (a *App) stopTray() {
 	a.logger.Printf("[systray] tray stopped")
 }
 
+// applyTraySetting 在 loadWindowSettings 加载 trayEnabled 后调用，
+// 使「关闭系统托盘」立即隐藏托盘图标，而不是留着图标但让入口失效。
+// trayEnabled 为 false、startTray 已创建托盘时调用 stopTray；否则忽略。
+func (a *App) applyTraySetting() {
+	if !a.getTrayEnabled() && a.trayAvailable() {
+		a.logger.Printf("[systray] trayEnabled=false, hiding tray")
+		a.stopTray()
+	}
+}
+
 // trayAvailable 返回托盘是否已就绪且未被停止。
 func (a *App) trayAvailable() bool {
 	trayMutex.Lock()

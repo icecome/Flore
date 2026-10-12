@@ -41,11 +41,6 @@ export interface SyncConfig {
   fileUrl: string;
   fileUsername: string;
   filePassword: string;
-  fileEndpoint: string;
-  fileRegion: string;
-  fileBucket: string;
-  fileAccessKey: string;
-  fileSecretKey: string;
   filePrefix: string;
   windowDays: number;
   pullInterval: number;

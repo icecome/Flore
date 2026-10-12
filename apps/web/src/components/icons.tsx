@@ -1,36 +1,34 @@
 /**
- * Typestream 图标系统
+ * Flore 图标系统
  * 基于开源 Lucide 图标库（MIT 许可证）
  * https://lucide.dev
  *
- * 统一通过 lucide-react 引入，保持 16px 默认尺寸、
- * 1.5px 描边、圆角端点，与项目整体低视觉噪音风格一致。
+ * 统一通过 lucide-react 引入，保持 16px 默认尺寸、1.5px 描边、圆角端点，
+ * 与项目整体低视觉噪音风格一致。
  *
  * 命名规范：
  * - 直接 re-export 使用原名（如 Star、Settings）
- * - 业务语义版本使用后缀 Icon（如 StarIcon 表示未填充星标）
- * - 别名仅保留语义差异显著的情况（如 FolderOpen → FolderOpenIcon）
+ * - 需要区分语义时用显式别名（如 StarIcon 表示未填充星标、StarFilledIcon 表示已填充）
+ * - 不为「可能以后用到」的图标预留导出：未被引用的图标按需删除，需要时再补
  */
 
 export {
   Settings,
   Plus,
   RefreshCw,
+  RefreshCw as RestartIcon,
   Star,
   Circle,
-  Dot,
   Check,
   Keyboard,
   ChevronDown,
   ChevronRight,
   ExternalLink,
-  ArrowUpRight,
   FileText,
   Upload,
   Folder,
   FolderInput,
   BookOpen,
-  Eye,
   EyeOff,
   MailOpen,
   Sun,
@@ -41,10 +39,10 @@ export {
   Globe,
   Rss,
   Inbox,
-  ListFilter,
   CheckCheck,
   X,
   Search,
+  SearchX,
   Clock,
   Type,
   Download,
@@ -55,10 +53,8 @@ export {
   ArrowLeft,
   Menu,
   AlertTriangle,
-  AlertCircle,
-  FolderOpen,
   Minus,
-  Maximize,
+  ArchiveRestore,
   Copy,
   Share2,
   MoreHorizontal,
@@ -68,14 +64,10 @@ export {
   Image,
   FileDown,
   Database,
-  Trash,
-  Archive,
-  FolderSync,
   Palette,
   Bell,
   RotateCw,
   Cog,
-  ArchiveRestore,
 } from 'lucide-react';
 
 import type { LucideProps } from 'lucide-react';
@@ -83,53 +75,23 @@ import { Star } from 'lucide-react';
 
 export type IconProps = LucideProps;
 
-// 业务语义别名：保留与原项目命名兼容
-// 收藏星标：未填充（描边）
+// 语义别名：仅保留有明确语义差异的星标（描边 = 未收藏，填充 = 已收藏）
 export const StarIcon = (props: IconProps) => <Star {...props} strokeWidth={1.5} />;
 
-// 收藏星标：已填充
 export const StarFilledIcon = (props: IconProps) => (
   <Star {...props} fill="currentColor" strokeWidth={1.5} />
 );
 
-// 其他 *Icon 别名：统一通过 re-export 简化，避免与原名重复定义
+// 组件内引用的稳定别名（原名在 lucide-react 升级时可能变化，此处收口）
 export {
   Settings as SettingsIcon,
-  Plus as PlusIcon,
-  RefreshCw as RefreshIcon,
-  Circle as CircleIcon,
-  Dot as DotIcon,
-  Check as CheckIcon,
-  ChevronDown as ChevronDownIcon,
-  ChevronRight as ChevronRightIcon,
-  ExternalLink as ExternalLinkIcon,
-  FileText as DocumentIcon,
   Upload as UploadIcon,
   Folder as FolderIcon,
-  BookOpen as ReadabilityIcon,
-  Eye as EyeIcon,
-  EyeOff as EyeOffIcon,
-  MailOpen as MailOpenIcon,
-  Sun as SunIcon,
-  Moon as MoonIcon,
-  Trash2 as TrashIcon,
-  Pencil as PencilIcon,
-  Loader2 as LoaderIcon,
-  Globe as GlobeIcon,
   Rss as RssIcon,
-  Inbox as InboxIcon,
-  ListFilter as FilterIcon,
-  CheckCheck as CheckAllIcon,
-  Type as TypeIcon,
   Download as DownloadIcon,
-  Square as SquareIcon,
-  CheckSquare as CheckSquareIcon,
-  ArrowLeft as ArrowLeftIcon,
   Menu as MenuIcon,
   FolderOpen as FolderOpenIcon,
   Minus as MinusIcon,
   Maximize as MaximizeIcon,
   Copy as CopyIcon,
-  Cog as CogIcon,
-  ArchiveRestore as ArchiveRestoreIcon,
 } from 'lucide-react';

@@ -54,10 +54,13 @@ rss/                                   # 项目根目录
 ├── server/                            # 后端服务
 │   └── go/                            #   Go 后端
 │       ├── cmd/                       #   入口（main.go）
+│       ├── backend/                   #   启动组装层（HTTP 服务生命周期、路由注册）
 │       ├── internal/
 │       │   ├── handlers/              #   HTTP 路由处理器
 │       │   ├── services/              #   业务逻辑层
 │       │   ├── models/                #   数据模型
+│       │   ├── sync/                  #   远端同步协议客户端（GReader/Miniflux）
+│       │   ├── logging/               #   日志轮转与敏感信息脱敏
 │       │   └── database/              #   数据库连接和迁移
 │       ├── pkg/                       #   跨模块共享包（如 paths/）
 │       ├── go.mod / go.sum
@@ -259,13 +262,20 @@ import (
 | 用途 | 路径 |
 |------|------|
 | Go 后端入口 | `server/go/cmd/main.go` |
-| Go 后端路由 | `server/go/internal/handlers/reader.go` |
-| Go 后端核心服务 | `server/go/internal/services/reader.go` |
+| Go 启动组装层 | `server/go/backend/backend.go`（HTTP 服务生命周期、路由注册、优雅关闭） |
+| Go 后端路由总表 | `server/go/internal/handlers/reader.go`（含认证中间件与限流） |
+| Go 后端核心服务 | `server/go/internal/services/reader.go`（ReaderService 聚合根，`NewReaderServiceWithDB` 注入式构造） |
 | Go 后端 RSS 抓取 | `server/go/internal/services/fetcher.go` |
+| Go 抓取协调器 | `server/go/internal/services/coordinator.go`（唯一调度权威：去重/并发/退避） |
 | Go 后端调度器 | `server/go/internal/services/scheduler.go` |
 | Go 后端数据模型 | `server/go/internal/models/models.go` |
 | Go 后端过滤规则 | `server/go/internal/services/filter.go` |
 | Go 后端全文提取 | `server/go/internal/services/readability.go` |
+| Go 代理内容处理引擎 | `server/go/internal/services/proxy_content.go`（CSP 剥离/base 注入/CSS 重写/frame 预检） |
+| Go 远端同步协议 | `server/go/internal/sync/`（provider.go 接口 + greader.go / miniflux.go 客户端） |
+| Go 同步引擎 | `server/go/internal/services/sync_engine.go` |
+| Go SSRF 校验 | `server/go/internal/services/urlpolicy.go` |
+| Go 日志 | `server/go/internal/logging/`（轮转 + 脱敏） |
 | Go 后端导入/导出 | `server/go/internal/services/backup.go` / `export.go` |
 | Go 共享工具包 | `server/go/pkg/paths/paths.go`（跨平台路径统一） |
 
@@ -331,8 +341,19 @@ import (
 | `ShortcutsHelpModal.tsx` | `src/components/ShortcutsHelpModal.tsx` | 快捷键帮助弹窗 |
 | `ExportArticlesModal.tsx` | `src/components/ExportArticlesModal.tsx` | 导出文章弹窗 |
 | `ImportOPMLModal.tsx` | `src/components/ImportOPMLModal.tsx` | 导入 OPML 弹窗 |
-| `icons.tsx` | `src/components/icons.tsx` | 图标 re-export（兼容 lucide-react） |
-| `settings/` | `src/components/settings/` | 设置面板子标签组件 |
+| `Button.tsx` | `src/components/Button.tsx` | 通用按钮 |
+| `OnboardingWelcome.tsx` | `src/components/OnboardingWelcome.tsx` | 首次启动引导 |
+| `ReaderToolbar.tsx` | `src/components/ReaderToolbar.tsx` | 阅读区工具栏 |
+| `ToastContainer.tsx` | `src/components/ToastContainer.tsx` | 全局 toast 容器 |
+| `UpdateBadge.tsx` | `src/components/UpdateBadge.tsx` | 更新提示徽标 |
+| `icons.tsx` | `src/components/icons.tsx` | 图标 re-export（兼容 lucide-react），组件禁止直接 import lucide-react |
+
+**settings/ 子目录**（`src/components/settings/`，设置面板子组件）：
+`SettingsGeneralTab` / `SettingsAppearanceTab` / `SettingsSourcesTab` / `SettingsRulesTab` / `SettingsDataTab` / `SettingsNotifyTab` / `SettingsNetworkTab` / `SettingsSyncTab` / `SettingsShortcutsTab` / `SettingsAboutTab`（10 个 tab 组件）、`SettingsShared`（Section/Row/Toggle/Select/Slider 等共享件）、`ThemeToggle`、`BackupList` / `BackupPolicyForm` / `RetentionForm` / `RuleTestModal`。
+
+**hooks**（`src/hooks/`）：`useSourcesData` / `useItemsData` / `useFetchOrchestration` / `useNotification` / `usePlatform` / `useBackups` / `useSyncStatus` / `useContextMenu` / `useClickOutside`。
+
+**utils**（`src/utils/`）：`api`（统一 API 入口）/ `fetchData`（底层请求封装）/ `apiBase` / `settings` / `toast` / `contextMenu` / `sourceColor`。
 
 ---
 
@@ -342,12 +363,13 @@ import (
 Folder 1→N Source 1→N Item
 Source 1→1 SourceHealth
 FilterRule → scope: global|source|folder
+Setting（键值对：schema_version、同步/代理配置等）
 ```
 
-- `Source` 包含 `active`、`isPrivate`、`hideInTimeline` 等状态字段
-- `Item` 通过 `isRead`、`isStarred`、`isReadLater` 标记状态
+- `Source` 包含 `active`、`isPrivate`、`hideInTimeline`、`remoteOrigin` 等状态字段
+- `Item` 通过 `isRead`、`isStarred`、`isReadLater` 标记状态，`link+sourceId` 复合唯一
 - 全文搜索通过 FTS5 虚拟表 `ItemSearch` 实现
-- 健康数据存储在独立的 `SourceHealth` 表
+- 健康数据存储在独立的 `SourceHealth` 表（含 304 协商缓存头与失败退避）
 - `GetSources()` 列表接口做 JOIN 查询，`GetSource()` 单条查询不加载健康数据
 
 ---

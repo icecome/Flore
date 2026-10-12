@@ -307,33 +307,6 @@ func (s *ReaderService) exportSettingsJSON() (string, error) {
 	return string(data), nil
 }
 
-// compressToZip 将单个文件压缩为 ZIP
-func compressToZip(srcPath, dstPath string) error {
-	srcData, err := os.ReadFile(srcPath)
-	if err != nil {
-		return err
-	}
-
-	outFile, err := os.Create(dstPath)
-	if err != nil {
-		return err
-	}
-	defer outFile.Close()
-
-	zw := zip.NewWriter(outFile)
-	fw, err := zw.Create(filepath.Base(srcPath))
-	if err != nil {
-		return err
-	}
-	if _, err := fw.Write(srcData); err != nil {
-		return err
-	}
-	if err := zw.Close(); err != nil {
-		return err
-	}
-	return outFile.Sync()
-}
-
 // compressToZipFull 将数据库 + 配置 + OPML 打包为全量 ZIP 备份。
 // warnings 非空时额外写入 backup-warnings.txt，使备份的完整性缺口可见（m-04），
 // 避免"配置/订阅源导出失败但仍显示备份成功"被静默吞掉。

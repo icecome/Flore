@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { cn } from '../lib/cn';
 import { sourceColorAuto } from '../utils/sourceColor';
-import { getCachedSettings } from '../utils/settings';
 import { getFaviconProxyBase, getFaviconDirectBase } from '../utils/api';
 
 interface Props {
@@ -10,6 +9,8 @@ interface Props {
   color?: string;
   size?: number;
   className?: string;
+  /** 站点图标模式。由调用方从 settings 传入，保证设置变更后立即生效。 */
+  faviconMode?: 'off' | 'yandex' | 'direct';
 }
 
 function getDomain(url?: string): string | null {
@@ -21,13 +22,8 @@ function getDomain(url?: string): string | null {
   }
 }
 
-function SourceAvatarBase({ name, url, color, size = 20, className }: Props) {
+function SourceAvatarBase({ name, url, color, size = 20, className, faviconMode = 'off' }: Props) {
   const [imgError, setImgError] = useState(false);
-  // 读取带缓存的设置，避免列表中每个头像挂载都重新 JSON.parse localStorage
-  const [faviconMode] = useState(() => {
-    const s = getCachedSettings();
-    return s.faviconMode ?? 'off';
-  });
   // url 变化时重置 imgError，避免切换源后仍显示字母头像
   useEffect(() => {
     setImgError(false);

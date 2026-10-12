@@ -363,11 +363,11 @@ export default function Reader({
     if (!item || !scrollRef.current) return false;
     const el = scrollRef.current.querySelector('article');
     if (!el) {
-      showToast('没有可导出的内容');
+      showToast('没有可导出的内容', 'error');
       return false;
     }
     try {
-      showToast('正在生成图片...');
+      showToast('正在生成图片……');
       // 动态 import 避免 html2canvas 拖累初始包体积
       const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(el, {
@@ -376,14 +376,14 @@ export default function Reader({
         scale: 2,
       });
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-      if (!blob) { showToast('导出失败'); return false; }
+      if (!blob) { showToast('导出失败', 'error'); return false; }
       const ok = await savePNGFile(blob, `${item.title.slice(0, 50)}.png`);
       if (ok) {
-        showToast('PNG 已导出');
+        showToast('PNG 已导出', 'success');
       }
       return ok;
     } catch {
-      showToast('导出失败');
+      showToast('导出失败', 'error');
       return false;
     }
   }, [item]);
@@ -393,15 +393,15 @@ export default function Reader({
     if (!item || !scrollRef.current) return false;
     const articleEl = scrollRef.current.querySelector('article');
     if (!articleEl) {
-      showToast('没有可导出的内容');
+      showToast('没有可导出的内容', 'error');
       return false;
     }
     try {
-      showToast('正在生成 PDF...');
+      showToast('正在生成 PDF……');
       // 创建一个临时的打印窗口，包含完整的文章样式
       const printWin = window.open('', '_blank');
       if (!printWin) {
-        showToast('请允许弹出窗口');
+        showToast('请允许弹出窗口', 'error');
         return false;
       }
 
@@ -436,11 +436,11 @@ export default function Reader({
           printWin.print();
         }
       }, 100);
-      showToast('PDF打印窗口已打开，请选择"另存为PDF"');
+      showToast('已打开打印窗口，请在其中选择「另存为 PDF」', 'success');
       return true;
     } catch (err) {
       console.error('Export PDF failed:', err);
-      showToast('导出失败');
+      showToast('导出失败', 'error');
       return false;
     }
   }, [item, settings]);
@@ -465,7 +465,7 @@ export default function Reader({
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       console.error('Failed to fetch full content:', err);
-      showToast('提取全文失败');
+      showToast('提取全文失败', 'error');
       setReadabilityContent(READABILITY_ERROR_HTML);
     } finally {
       if (readabilityAbortRef.current === controller) {
@@ -498,7 +498,7 @@ export default function Reader({
     } catch (err) {
       // 预检失败 → 保守走代理
       console.error('Frameable precheck failed:', err);
-      showToast('原文嵌入预检失败，已改用代理模式');
+      showToast('原文嵌入预检失败，已改用代理模式', 'error');
       setIframeUsesProxy(true);
       setIframeSrc(getArticleProxyUrl(item.id));
     }
@@ -514,7 +514,7 @@ export default function Reader({
     e.preventDefault();
     const resolved = resolveArticleHref(href, item?.link);
     if (!resolved) {
-      showToast('无效的链接');
+      showToast('无效的链接', 'error');
       return;
     }
     openExternal(resolved);
@@ -535,7 +535,7 @@ export default function Reader({
   if (loading) {
     return (
       <div className="relative flex h-full flex-1 flex-col bg-canvas">
-        <Loading text="正在加载文章..." fullHeight />
+        <Loading text="正在加载文章……" fullHeight />
       </div>
     );
   }
@@ -546,7 +546,7 @@ export default function Reader({
         <EmptyState
           icon={<BookOpen size={30} />}
           title="选择一篇文章开始阅读"
-          description="从左侧列表挑选一篇文章，或按 J / K 上下浏览。"
+          description="从左侧列表挑选一篇文章，或按 ↑ / ↓ / J / K 上下浏览。"
         />
       </div>
     );
@@ -590,7 +590,7 @@ export default function Reader({
         {displayMode === 'readability' ? (
           /* 全文模式：从后端提取的全文内容 */
           loadingReadability ? (
-            <Loading text="正在提取全文内容..." fullHeight />
+            <Loading text="正在提取全文内容……" fullHeight />
           ) : (
             <article
               className="mx-auto w-full px-6 py-12 md:px-10"
@@ -626,7 +626,7 @@ export default function Reader({
              直连时为跨 origin 加载，sandbox 含 allow-same-origin（安全）；
              代理时为同源加载，sandbox 去掉 allow-same-origin，使代理页 JS 运行在 opaque origin，无法访问父窗口。 */
           <div className="relative h-full w-full">
-            {loadingIframe && <Loading text="正在加载网页..." fullHeight />}
+            {loadingIframe && <Loading text="正在加载网页……" fullHeight />}
             {iframeSrc && (
               <iframe
                 src={iframeSrc}

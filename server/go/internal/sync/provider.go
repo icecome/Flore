@@ -9,11 +9,11 @@ import (
 	"time"
 )
 
-// 预定义 Provider 名称，同时是 Source.RemoteOrigin 的取值域
+// 预定义 Provider 名称，同时是 Source.RemoteOrigin 的取值域。
+// 只列出已实现的 Provider；新增实现时在此登记，sync_config 的白名单与引擎分支同步更新。
 const (
 	ProviderMiniflux = "miniflux"
 	ProviderGReader  = "greader"
-	ProviderTTRSS    = "ttrss"
 )
 
 // ErrUnsupported 操作当前 Provider 不支持（如 P0 阶段 Miniflux 的 rename/move）
@@ -122,63 +122,6 @@ type RemoteProvider interface {
 
 	// PushStates 推送状态变更（已读/星标）
 	PushStates(ctx context.Context, states []StateChange) error
-
-	// HealthCheck 检测可达性与认证有效性
-	HealthCheck(ctx context.Context) error
-}
-
-// ReaderPackage 文件后端整包数据（P3 实现，此处仅定义契约）
-type ReaderPackage struct {
-	// Version 数据格式版本
-	Version int
-	// UpdatedAt 整包生成时间（毫秒）
-	UpdatedAt int64
-	// Folders / Sources / Items 完整阅读器数据
-	Folders []PackageFolder
-	Sources []PackageSource
-	Items   []PackageItem
-}
-
-// PackageFolder 整包文件夹条目
-type PackageFolder struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	ParentID *string `json:"parentId"`
-}
-
-// PackageSource 整包订阅源条目
-type PackageSource struct {
-	ID       string `json:"id"`
-	URL      string `json:"url"`
-	Title    string `json:"title"`
-	FolderID string `json:"folderId"`
-	Active   bool   `json:"active"`
-}
-
-// PackageItem 整包文章条目
-type PackageItem struct {
-	ID        string `json:"id"`
-	SourceURL string `json:"sourceUrl"`
-	Link      string `json:"link"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	Author    string `json:"author"`
-	PubDate   int64  `json:"pubDate"`
-	IsRead    bool   `json:"isRead"`
-	IsStarred bool   `json:"isStarred"`
-	UpdatedAt int64  `json:"updatedAt"`
-}
-
-// FileProvider 文件类后端（WebDAV / S3，P3 实现）
-type FileProvider interface {
-	// Name 提供器名称
-	Name() string
-
-	// FetchPackage 拉取远端整包
-	FetchPackage(ctx context.Context) (*ReaderPackage, error)
-
-	// StorePackage 写回整包（读-合并-写）
-	StorePackage(ctx context.Context, pkg *ReaderPackage) error
 
 	// HealthCheck 检测可达性与认证有效性
 	HealthCheck(ctx context.Context) error

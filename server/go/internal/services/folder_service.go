@@ -50,29 +50,6 @@ func (s *ReaderService) DeleteFolder(id int) error {
 	})
 }
 
-// MoveSourceFolder 移动订阅源到指定文件夹，并自动清理空文件夹
-func (s *ReaderService) MoveSourceFolder(sourceID int, folderID *int) error {
-	return s.getDb().Transaction(func(tx *gorm.DB) error {
-		// 获取源当前的文件夹
-		var source models.Source
-		if err := tx.First(&source, sourceID).Error; err != nil {
-			return err
-		}
-		oldFolderID := source.FolderID
-
-		// 移动源
-		if err := tx.Model(&models.Source{}).Where("id = ?", sourceID).Update("folderId", folderID).Error; err != nil {
-			return err
-		}
-
-		// 如果源原来属于某个文件夹，检查并清理空文件夹
-		if oldFolderID != nil {
-			return s.cleanupEmptyFolder(tx, *oldFolderID)
-		}
-		return nil
-	})
-}
-
 // getAllFolderAllDescendantIDs 获取文件夹及其所有子文件夹的ID（包含自身）。
 // 一次查询加载全部文件夹，在内存中按父子关系 BFS 遍历，避免逐层查询的 N+1。
 func (s *ReaderService) getAllFolderAllDescendantIDs(folderID int) ([]int, error) {

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { getVersion, checkForUpdate, startUpdate, getCachedUpdate, getUpdateProgress, isDesktop, openExternal } from '../../utils/api';
-
-// 项目仓库地址（开源地址，非敏感配置）
-const REPO_URL = 'https://github.com/icecome/Flore';
-import type { UpdateInfo } from '../../utils/api';
+import { getVersion, isDesktop, openExternal } from '../../utils/api';
+import useUpdate from '../../hooks/useUpdate';
 import type { AppSettings } from '../../utils/settings';
 import { Section, SmallBtn, Row, Toggle } from './SettingsShared';
 import { showToast } from '../../utils/toast';
+import { translateBackendError } from '../../utils/backendError';
+
+// 项目仓库地址（开源地址，非敏感配置）
+const REPO_URL = 'https://github.com/icecome/Flore';
 
 const desktop = isDesktop();
 
@@ -17,100 +18,63 @@ interface Props {
 
 export default function SettingsAboutTab({ settings, updateSetting }: Props) {
   const [version, setVersion] = useState('...');
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  // 更新状态统一走全局仓库：状态属主在桌面壳，弹窗开合/卸载不影响下载与进度复原
+  const { snapshot, check, download, restart } = useUpdate();
   const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [checkError, setCheckError] = useState<string | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
-  const [updateManualUrl, setUpdateManualUrl] = useState<string | null>(null);
+  // 手动下载地址（下载失败时展示）与最近一次错误
+  const [manualUrl, setManualUrl] = useState<string | null>(null);
 
-  // 挂载时读取版本号 + 后台缓存更新结果 + 后台下载进度
+  // 挂载时读取版本号
   useEffect(() => {
     let cancelled = false;
-
-    // 版本号获取失败仅降级展示"未知"，不打扰用户
     getVersion()
       .then((data) => { if (!cancelled) setVersion(data.version || '未知'); })
       .catch((err) => {
         console.error('Failed to fetch version:', err);
         if (!cancelled) setVersion('未知');
       });
-
-    // 桌面端读取后台缓存的更新结果 + 后台下载进度；
-    // 两者必须并行读，避免"中途关弹窗后重开"看不到"正在下载"状态、再次点击触发并发下载竞态。
-    if (desktop) {
-      (async () => {
-        const [cached, prog] = await Promise.all([
-          getCachedUpdate().catch(() => null),
-          getUpdateProgress().catch(() => 0),
-        ]);
-        if (cancelled) return;
-        if (cached) setUpdate(cached);
-        // progress 在 (0, 1) 表示下载进行中；(≥1) 表示已下载完成、进程即将重启。
-        // 两种状态都应让"立即更新"按钮禁用，避免重入。
-        if (prog > 0) {
-          setUpdating(true);
-          setProgress(prog >= 1 ? 1 : prog);
-        }
-      })();
-    }
-
     return () => { cancelled = true; };
   }, []);
 
-  // 更新下载中时轮询进度
-  useEffect(() => {
-    if (!desktop || !updating) return;
-    const timer = setInterval(async () => {
-      try {
-        const p = await getUpdateProgress();
-        setProgress(p);
-      } catch { /* 静默 */ }
-    }, 400);
-    return () => clearInterval(timer);
-  }, [updating]);
-
   const handleCheck = async () => {
     setChecking(true);
-    setCheckError(null);
-    setUpdateError(null);
-    setUpdate(null);
+    setManualUrl(null);
     try {
-      const info = await checkForUpdate();
-      if (!info) {
-        showToast('已是最新版本');
-      } else {
-        setUpdate(info);
-      }
+      await check();
+      // 结果经事件/快照回写，无需本地保存；这里只提示"无更新"由 error/available 兜底
+      if (snapshot.status === 'idle') showToast('已是最新版本', 'success');
     } catch (err) {
       console.error('检查更新失败:', err);
-      setCheckError('检查更新失败，请稍后重试');
+      showToast('检查更新失败，请稍后重试', 'error');
     } finally {
       setChecking(false);
     }
   };
 
-  const handleUpdate = async () => {
-    setUpdating(true);
-    setUpdateError(null);
-    setProgress(0);
+  const handleDownload = async () => {
+    setManualUrl(null);
     try {
-      await startUpdate();
-      // 进程将重启，此处通常不再返回
+      await download();
     } catch (err) {
       console.error('更新失败:', err);
-      // 所有下载源均不可用时，提示用户手动下载
-      const manualUrl = update?.urls?.[0] ?? REPO_URL;
-      setUpdateError(`自动更新失败，请手动下载最新版本。下载地址：`);
-      setUpdateManualUrl(manualUrl);
-      showToast('更新失败：' + (err instanceof Error ? err.message : String(err)));
-      setUpdating(false);
+      const url = snapshot.info?.urls?.[0] ?? REPO_URL;
+      setManualUrl(url);
+      showToast('更新失败：' + (translateBackendError(err instanceof Error ? err.message : String(err)) ?? '未知原因'), 'error');
     }
   };
 
-  // 进度条百分比
-  const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
+  const handleRestart = async () => {
+    try {
+      await restart();
+    } catch (err) {
+      console.error('重启应用失败:', err);
+      showToast('重启应用以完成更新失败', 'error');
+    }
+  };
+
+  const pct = Math.min(100, Math.max(0, Math.round(snapshot.progress * 100)));
+  const { status } = snapshot;
+  const busy = status === 'checking' || status === 'downloading';
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -119,13 +83,13 @@ export default function SettingsAboutTab({ settings, updateSetting }: Props) {
           <span className="text-[15px] font-medium text-primary">Flore v{version}</span>
           {desktop && (
             <SmallBtn
-              label={checking ? '检查中…' : '检查更新'}
-              disabled={checking || updating}
+              label={status === 'checking' ? '检查中…' : '检查更新'}
+              disabled={busy}
               onClick={handleCheck}
             />
           )}
         </div>
-        {checkError && <p className="mt-2 text-[13px] text-danger">{checkError}</p>}
+
         {desktop && (
           <Row
             title="启动时检查更新"
@@ -138,27 +102,41 @@ export default function SettingsAboutTab({ settings, updateSetting }: Props) {
             }
           />
         )}
-        {update && !updating && !updateError && (
+        {desktop && (
+          <Row
+            title="检测到新版本后自动下载"
+            desc="后台静默下载安装包，下载完成后仍需确认重启才会应用更新"
+            control={
+              <Toggle
+                checked={settings.updateAutoDownload}
+                onChange={(v) => updateSetting('updateAutoDownload', v)}
+              />
+            }
+          />
+        )}
+
+        {/* 发现新版本 → 发起下载 */}
+        {status === 'available' && snapshot.info && !busy && (
           <div className="mt-3 rounded-md border border-border-subtle p-3">
             <div className="text-[13.5px] font-medium text-primary">
-              发现新版本 v{update.latestVersion}
+              发现新版本 v{snapshot.info.latestVersion}
+              {snapshot.info.forced && (
+                <span className="ml-2 text-[12px] font-normal text-danger">（当前版本过低，建议尽快更新）</span>
+              )}
             </div>
-            {update.notes && (
+            {snapshot.info.notes && (
               <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-snug text-secondary">
-                {update.notes}
+                {snapshot.info.notes}
               </p>
             )}
             <div className="mt-3">
-              <SmallBtn
-                label={updating ? '更新中…' : '立即更新'}
-                disabled={updating}
-                onClick={handleUpdate}
-              />
+              <SmallBtn label="立即更新" onClick={handleDownload} />
             </div>
           </div>
         )}
-        {/* 下载进度条 */}
-        {updating && (
+
+        {/* 下载进行中 → 进度条 */}
+        {status === 'downloading' && (
           <div className="mt-3 rounded-md border border-border-subtle p-3">
             <div className="mb-1.5 flex items-center justify-between text-[12.5px] text-secondary">
               <span>正在下载更新…</span>
@@ -172,17 +150,48 @@ export default function SettingsAboutTab({ settings, updateSetting }: Props) {
             </div>
           </div>
         )}
-        {/* 下载失败 → 手动下载提示 */}
-        {updateError && updateManualUrl && (
+
+        {/* 下载完成 → 确认重启应用 */}
+        {status === 'ready' && (
           <div className="mt-3 rounded-md border border-border-subtle p-3">
-            <p className="text-[13px] text-danger">{updateError}</p>
-            <button
-              type="button"
-              className="mt-1 block w-full break-all text-left text-[13px] text-primary underline-offset-2 hover:underline focus:outline-none"
-              onClick={() => openExternal(updateManualUrl)}
-            >
-              {updateManualUrl}
-            </button>
+            <div className="text-[13.5px] font-medium text-primary">
+              更新已下载完成
+            </div>
+            <p className="mt-1 text-[12.5px] text-secondary">
+              重启应用以完成更新。
+            </p>
+            <div className="mt-3">
+              <SmallBtn label="立即重启" onClick={handleRestart} />
+            </div>
+          </div>
+        )}
+
+        {/* 下载/检查失败 → 手动下载提示 */}
+        {status === 'error' && (
+          <div className="mt-3 rounded-md border border-border-subtle p-3">
+            <p className="text-[13px] text-danger">
+              {snapshot.info && !manualUrl
+                ? `自动更新失败（${snapshot.error || '未知错误'}）。请手动下载最新版本：`
+                : `自动更新失败，请手动下载最新版本：`}
+            </p>
+            {manualUrl && (
+              <button
+                type="button"
+                className="mt-1 block w-full break-all text-left text-[13px] text-primary underline-offset-2 hover:underline focus:outline-none"
+                onClick={() => openExternal(manualUrl)}
+              >
+                {manualUrl}
+              </button>
+            )}
+            {!manualUrl && (
+              <button
+                type="button"
+                className="mt-1 block w-full break-all text-left text-[13px] text-primary underline-offset-2 hover:underline focus:outline-none"
+                onClick={() => openExternal(REPO_URL)}
+              >
+                {REPO_URL}
+              </button>
+            )}
           </div>
         )}
       </Section>

@@ -265,7 +265,7 @@ func buildCORSConfig() cors.Config {
 func resolvePort() (string, error) {
 	port := os.Getenv("PORT")
 	if port == "" {
-		return "3002", nil
+		return handlers.DefaultPort, nil
 	}
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum < 0 || portNum > 65535 {

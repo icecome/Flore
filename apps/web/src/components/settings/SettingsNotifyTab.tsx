@@ -22,7 +22,7 @@ export default function SettingsNotifyTab({ settings, updateSetting }: Props) {
       <Section title="窗口行为">
         <Row
           title="关闭按钮行为"
-          desc="点击窗口关闭按钮时的行为。"
+          desc="「退出应用」直接结束进程；「最小化到托盘」隐藏窗口，需要托盘已启用。"
           control={
             <Select
               value={settings.closeBehavior}
@@ -33,7 +33,7 @@ export default function SettingsNotifyTab({ settings, updateSetting }: Props) {
         />
         <Row
           title="最小化行为"
-          desc="点击窗口最小化按钮时的行为。"
+          desc="「最小化到任务栏」在任务栏保留入口；「最小化到托盘」隐藏窗口，仅从托盘恢复。"
           control={
             <Select
               value={settings.minimizeBehavior}
@@ -44,7 +44,7 @@ export default function SettingsNotifyTab({ settings, updateSetting }: Props) {
         />
         <Row
           title="启用系统托盘"
-          desc="在系统托盘显示图标，允许应用在后台运行。"
+          desc="在系统托盘显示图标，允许应用在后台运行。关闭托盘后，「最小化到托盘」和「关闭到托盘」将改为最小化到任务栏。重启应用后生效。"
           control={
             <Toggle
               checked={settings.trayEnabled}
@@ -57,7 +57,7 @@ export default function SettingsNotifyTab({ settings, updateSetting }: Props) {
       <Section title="桌面通知">
         <Row
           title="启用通知"
-          desc="有新文章时推送系统通知。"
+          desc="抓取完成后，由操作系统推送新文章通知。仅 Web 版可用；桌面版由系统原生通知发送。"
           control={
             <Toggle
               checked={settings.notifyEnabled}

@@ -80,6 +80,68 @@ export function resolveReaderTheme(
   return appTheme === 'dark' ? preset.dark : preset.light;
 }
 
+// ============================================================
+// 应用主题（appTheme）的唯一定义点。
+// 预 paint 脚本（index.html）从 localStorage 读取的 'theme' 只是「首帧提示」，
+// 加载完成后由 applyAppTheme 统一决定 data-theme，两者经 setThemePersist 保持同步。
+// ============================================================
+
+/** 把 appTheme 解析为具体的 data-theme 值。 */
+export function resolveAppTheme(appTheme: 'light' | 'dark' | 'system'): 'light' | 'dark' {
+  if (appTheme !== 'system') return appTheme;
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+/** 将解析后的主题写入 <html data-theme>。 */
+export function applyAppTheme(appTheme: 'light' | 'dark' | 'system'): void {
+  document.documentElement.setAttribute('data-theme', resolveAppTheme(appTheme));
+}
+
+/** 持久化主题选择：同步写 localStorage（供 index.html 预 paint 脚本使用）与 appTheme 设置项。 */
+export function setThemePersist(
+  appTheme: 'light' | 'dark' | 'system',
+  save: (settings: AppSettings) => void,
+  current: AppSettings,
+): void {
+  try {
+    if (appTheme === 'system') localStorage.removeItem('theme');
+    else localStorage.setItem('theme', appTheme);
+  } catch (err) {
+    // 隐私模式下写入可能失败；当前会话仍立即生效，失败只影响下次首帧
+    console.error('Failed to persist theme to localStorage:', err);
+  }
+  applyAppTheme(appTheme);
+  save({ ...current, appTheme });
+}
+
+/**
+ * 注册系统主题变化监听：appTheme 为 system 时跟随 OS 深浅色实时切换。
+ * 返回取消函数；App 卸载时调用。
+ */
+export function watchSystemTheme(
+  getAppTheme: () => 'light' | 'dark' | 'system',
+): () => void {
+  if (typeof window.matchMedia !== 'function') return () => {};
+  const mql = window.matchMedia('(prefers-color-scheme: dark)');
+  const handler = () => {
+    if (getAppTheme() === 'system') applyAppTheme('system');
+  };
+  if (typeof mql.addEventListener === 'function') {
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }
+  // 旧版 WebView 兼容：addListener / removeListener
+  if (typeof mql.addListener === 'function') {
+    mql.addListener(handler);
+    return () => mql.removeListener(handler);
+  }
+  return () => {};
+}
+
 // 标记已读模式（单选）
 export type MarkReadMode = 'none' | 'scroll' | 'hover' | 'view';
 
@@ -166,6 +228,8 @@ export interface AppSettings {
   // === 更新（桌面端） ===
   updateCheckOnStartup: boolean;
   lastUpdateCheckAt: number; // 上次启动检查更新的时间戳（毫秒），用于 3 天节流
+  /** 检测到新版本后自动开始下载（下载完成后仍需用户确认重启） */
+  updateAutoDownload: boolean;
 }
 
 const STORAGE_KEY = 'flore-settings';
@@ -210,9 +274,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   accentColor: '#7B68EE',
 
   // 数据管理：备份策略
+  // 默认开启：本地优先应用的全部价值在于数据只存在于本机，自动备份是这一承诺的最低保障。
+  // 用户可在「设置 → 数据管理」关闭；已显式关闭过的用户不会被默认值覆盖。
   backupMaxKeep: 10,
   backupMaxDays: 30,
-  backupAutoEnabled: false,
+  backupAutoEnabled: true,
   backupAutoInterval: 1440,
 
   // 数据管理：文章留存
@@ -224,7 +290,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 通知与驻留
   closeBehavior: 'quit',
   minimizeBehavior: 'taskbar',
-  trayEnabled: false,
+  // 托盘是「最小化到托盘」与「关闭到托盘」两个窗口行为的前提，默认开启。
+  // 关闭后桌面壳会移除托盘图标，窗口行为退回到任务栏（见 apps/desktop）。
+  trayEnabled: true,
   notifyEnabled: false,
   notifyBatchMin: 5,
 
@@ -240,6 +308,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 更新（桌面端）
   updateCheckOnStartup: true,
   lastUpdateCheckAt: 0,
+  // 默认不自动下载：尊重用户流量与知情权，检测到新版后仅轻提示
+  updateAutoDownload: false,
 };
 
 // 迁移旧版 mark 已读配置到新字段（优先级：hover > scroll > view）

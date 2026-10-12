@@ -24,8 +24,8 @@ RSS Reader 是一个**本地优先**的 RSS 阅读器桌面应用。它让用户
 
 ## 架构原则
 
-1. **本地优先（Local-First）**：数据始终在本地，网络仅用于抓取 RSS Feed
-2. **极简依赖**：前端仅依赖 React + lucide-react，无 UI 组件库
+1. **本地优先（Local-First）**：数据始终在本地，网络仅用于抓取 RSS Feed 与可选的远端同步
+2. **极简依赖**：前端仅依赖 React、lucide-react 与少量工具库（dompurify、html2canvas），无 UI 组件库
 3. **单进程桌面体验**：Wails 桌面壳管理 Go 后端子进程，用户无需手动启动服务
 4. **读写分离**：阅读器（Reader）与路由工具（Routing Tool）是两个独立的应用，通过 OPML 文件共享订阅数据
 

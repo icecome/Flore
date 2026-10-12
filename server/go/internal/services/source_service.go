@@ -78,6 +78,11 @@ func (s *ReaderService) loadUnreadCountMap() (map[int]int64, error) {
 }
 
 // computeUnreadCountMap 执行实际 SQL 聚合，得到各源未读数。
+// 语义：侧边栏徽标显示的是「该源可见的未读数」，与点击源后文章列表的未读一致。
+// 因此必须套用与 GetUnreadCount/CountItems 相同的 Source 级过滤（hideInTimeline / isPrivate），
+// 否则隐藏源会出现「徽标有数、列表为空」的不一致（此前三处查询各自实现，已发生漂移）。
+// 注意：这里不过滤 hidePrivate —— 私密源的徽标在侧边栏仍然可见（是否隐藏私密源由
+// hidePrivateInSidebar 设置在前端决定），与 GetUnreadCount 的全局语义不同。
 func (s *ReaderService) computeUnreadCountMap() (map[int]int64, error) {
 	type unreadCount struct {
 		SourceID int
@@ -85,9 +90,11 @@ func (s *ReaderService) computeUnreadCountMap() (map[int]int64, error) {
 	}
 	var counts []unreadCount
 	if err := s.getDb().Model(&models.Item{}).
-		Select("sourceId AS source_id, COUNT(*) AS count").
-		Where("isRead = ?", false).
-		Group("sourceId").
+		Select("Item.sourceId AS source_id, COUNT(*) AS count").
+		Joins("LEFT JOIN Source ON Item.sourceId = Source.id").
+		Where("Item.isRead = ?", false).
+		Where("Source.hideInTimeline = ?", false).
+		Group("Item.sourceId").
 		Find(&counts).Error; err != nil {
 		return nil, fmt.Errorf("failed to count unread items: %w", err)
 	}

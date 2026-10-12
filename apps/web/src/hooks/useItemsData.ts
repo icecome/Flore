@@ -7,6 +7,9 @@ import { showToast } from '../utils/toast';
 
 export type ItemFilter = 'all' | 'unread' | 'starred' | 'readLater';
 
+/** 搜索结果的空状态类型，用于区分「读完了」和「搜不到/搜索失败」。 */
+export type SearchStatus = 'idle' | 'no-results' | 'error';
+
 export interface UseItemsDataParams {
   selectedSourceId: number | null;
   selectedFolderId: number | null;
@@ -25,6 +28,7 @@ export interface UseItemsDataResult {
   loadingItems: boolean;
   searchKeyword: string;
   isSearchMode: boolean;
+  searchStatus: SearchStatus;
   setSearchKeyword: Dispatch<SetStateAction<string>>;
   setIsSearchMode: Dispatch<SetStateAction<boolean>>;
   setItems: Dispatch<SetStateAction<Item[]>>;
@@ -113,7 +117,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch item count:', err);
-      showToast('获取文章总数失败');
+      showToast('获取文章总数失败', 'error');
     }
   }, [selectedSourceId, selectedFolderId, settings.hidePrivateInTimeline]);
 
@@ -129,7 +133,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch read later count:', err);
-      showToast('获取稍后阅读数失败');
+      showToast('获取稍后阅读数失败', 'error');
     }
   }, [settings.hidePrivateInTimeline]);
 
@@ -145,7 +149,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     } catch (err) {
       if (signal?.aborted) return;
       console.error('Failed to fetch starred count:', err);
-      showToast('获取收藏数失败');
+      showToast('获取收藏数失败', 'error');
     }
   }, [settings.hidePrivateInTimeline]);
 
@@ -174,7 +178,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     } catch (err) {
       if (!signal?.aborted) {
         console.error('Failed to fetch items:', err);
-        showToast('获取文章列表失败');
+        showToast('获取文章列表失败', 'error');
       }
     } finally {
       setLoadingItems(false);
@@ -188,22 +192,29 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     await fetchItems(signal, { append: true });
   }, [fetchItems, hasMore, loadingMore, loadingItems]);
 
+  // 搜索状态：区分「没有结果」和「搜索失败」，供空态渲染分支使用
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>('idle');
+
   // 搜索文章
   const fetchSearchItems = useCallback(async (keyword: string, signal?: AbortSignal) => {
     setLoadingItems(true);
     try {
       const params = new URLSearchParams();
       params.append('q', keyword);
+      // 后端搜索单次最多返回 50 条；超出部分不返回也不报错，由调用方在 UI 提示截断
       params.append('limit', '50');
       const data = await searchItems(params, signal);
-      setItems(Array.isArray(data) ? data : []);
-      setTotalCount(Array.isArray(data) ? data.length : 0);
+      const arr = Array.isArray(data) ? data : [];
+      setItems(arr);
+      setTotalCount(arr.length);
+      setSearchStatus(arr.length === 0 ? 'no-results' : 'idle');
     } catch (err) {
       if (signal?.aborted) { setLoadingItems(false); return; }
       console.error('Failed to search items:', err);
-      showToast('搜索文章失败');
+      showToast('搜索文章失败', 'error');
       setItems([]);
       setTotalCount(0);
+      setSearchStatus('error');
     } finally {
       setLoadingItems(false);
     }
@@ -216,6 +227,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
       fetchSearchItems(searchKeyword, signal);
       setSelectedItem(null);
     } else {
+      setSearchStatus('idle');
       fetchItems(signal);
       fetchItemCount(signal);
       fetchUnreadCount(signal);
@@ -234,6 +246,7 @@ export function useItemsData(params: UseItemsDataParams): UseItemsDataResult {
     loadingItems,
     searchKeyword,
     isSearchMode,
+    searchStatus,
     setSearchKeyword,
     setIsSearchMode,
     setItems,

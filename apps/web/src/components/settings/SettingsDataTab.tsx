@@ -90,10 +90,10 @@ export default function SettingsDataTab({ settings, updateSetting, onRestartApp 
         excludeStarred: settings.retentionExcludeStarred,
         excludeReadLater: settings.retentionExcludeReadLater,
       });
-      showToast("已清理过期文章");
+      showToast("已清理过期文章", 'success');
     } catch (err) {
       console.error("Cleanup articles error:", err);
-      showToast("清理失败");
+      showToast("清理失败", 'error');
     } finally {
       setCleaningArticles(false);
     }

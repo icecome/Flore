@@ -12,7 +12,7 @@ interface Props {
   autoFocus?: boolean;
 }
 
-export default function SearchBox({ query, onSearch, onClear, placeholder = '搜索文章...', autoFocus = false }: Props) {
+export default function SearchBox({ query, onSearch, onClear, placeholder = '搜索文章', autoFocus = false }: Props) {
   const [input, setInput] = useState(query);
   const inputRef = useRef<HTMLInputElement>(null);
   const { menuProps, showMenu } = useContextMenu();

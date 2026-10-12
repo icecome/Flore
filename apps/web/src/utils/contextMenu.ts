@@ -16,10 +16,10 @@ async function downloadItemMarkdown(itemId: number): Promise<void> {
     const markdownUrl = getItemMarkdownUrl(itemId);
     try {
       await desktopApp.SaveMarkdownFile(markdownUrl);
-      showToast('Markdown 已保存');
+      showToast('Markdown 已保存', 'success');
     } catch (err) {
       console.error('Failed to save Markdown file via Wails:', err);
-      showToast('保存失败，请重试');
+      showToast('保存失败，请重试', 'error');
     }
     return;
   }
@@ -39,7 +39,7 @@ async function downloadItemMarkdown(itemId: number): Promise<void> {
       // 无论 fetch/write 是否抛错都关闭句柄，避免文件被占用（m-15）
       await writable.close();
     }
-    showToast('Markdown 已保存');
+    showToast('Markdown 已保存', 'success');
     return;
   } catch (err) {
     console.warn('showSaveFilePicker not supported or cancelled', err);
@@ -58,10 +58,10 @@ async function downloadItemMarkdown(itemId: number): Promise<void> {
     a.download = `${itemId}.md`;
     a.click();
     URL.revokeObjectURL(objectUrl);
-    showToast('正在下载 Markdown...');
+    showToast('正在下载 Markdown……');
   } catch (err) {
     console.error('Failed to download markdown:', err);
-    showToast('下载失败，请重试');
+    showToast('下载失败，请重试', 'error');
   }
 }
 
@@ -189,8 +189,8 @@ export function buildArticleRowMenu(
     {
       id: 'copy', label: '复制链接',
       onClick: async () => {
-        try { await navigator.clipboard.writeText(item.link); showToast('链接已复制'); }
-        catch { showToast('复制失败'); }
+        try { await navigator.clipboard.writeText(item.link); showToast('链接已复制', 'success'); }
+        catch { showToast('复制失败', 'error'); }
       },
     },
     {
@@ -249,7 +249,7 @@ export function buildReaderContentMenu(
       label: '复制选中文字',
       onClick: () => {
         // TODO: document.execCommand 已废弃，未来迁移至 navigator.clipboard.writeText（需同步获取 Selection 文本）
-        try { document.execCommand('copy'); } catch { showToast('复制失败'); }
+        try { document.execCommand('copy'); } catch { showToast('复制失败', 'error'); }
       },
     });
     items.push({ id: 'sep-sel', label: '', separator: true });
@@ -265,8 +265,8 @@ export function buildReaderContentMenu(
     {
       id: 'copy-link', label: '复制文章链接',
       onClick: async () => {
-        try { await navigator.clipboard.writeText(item.link); showToast('链接已复制'); }
-        catch { showToast('复制失败'); }
+        try { await navigator.clipboard.writeText(item.link); showToast('链接已复制', 'success'); }
+        catch { showToast('复制失败', 'error'); }
       },
     },
   );
@@ -318,7 +318,7 @@ export function buildInputMenu(
             el.selectionStart = el.selectionEnd = start + text.length;
           }
         } catch {
-          showToast('粘贴失败，请使用 Ctrl+V');
+          showToast('粘贴失败，请使用 Ctrl+V', 'error');
         }
       },
     });

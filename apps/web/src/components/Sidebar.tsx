@@ -391,7 +391,7 @@ export default function Sidebar({
             query={searchKeyword}
             onSearch={(kw) => onSearch?.(kw)}
             onClear={() => onClearSearch?.()}
-            placeholder="搜索文章..."
+            placeholder="搜索文章"
             autoFocus
           />
         </div>
@@ -402,7 +402,7 @@ export default function Sidebar({
             query={searchKeyword}
             onSearch={(kw) => onSearch?.(kw)}
             onClear={() => onClearSearch?.()}
-            placeholder="搜索文章..."
+            placeholder="搜索文章"
           />
         </div>
       )}

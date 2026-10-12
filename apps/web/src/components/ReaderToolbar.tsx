@@ -610,21 +610,25 @@ function SharePanel({
       }
     }
     const ok = await clipboardWrite(item.link);
-    showToast(ok ? '链接已复制' : '复制失败');
+    if (ok) {
+      showToast('链接已复制', 'success');
+    } else {
+      showToast('复制失败', 'error');
+    }
     onClose();
   };
 
   const copyToClipboard = async (text: string, toast: string) => {
     const ok = await clipboardWrite(text);
     if (ok) {
-      showToast(toast);
+      showToast(toast, 'success');
       onClose();
     } else {
-      showToast('复制失败');
+      showToast('复制失败', 'error');
     }
   };
 
-  const displayTitle = item.title.length > 40 ? item.title.slice(0, 40) + '...' : item.title;
+  const displayTitle = item.title.length > 40 ? item.title.slice(0, 40) + '……' : item.title;
 
   const shareActions = [
     {

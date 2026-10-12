@@ -9,9 +9,46 @@ import Loading from './Loading';
 import SourceAvatar from './SourceAvatar';
 import { useContextMenu } from '../hooks/useContextMenu';
 import { buildArticleRowMenu, buildArticleListHeaderMenu } from '../utils/contextMenu';
-import { StarIcon, StarFilledIcon, RefreshCw, Circle, CheckCheck, Clock, Download, Square, CheckSquare, Check } from './icons';
+import { StarIcon, StarFilledIcon, RefreshCw, Circle, CheckCheck, Clock, Download, Square, CheckSquare, Check, SearchX } from './icons';
 
 type FilterType = 'all' | 'unread' | 'starred' | 'readLater';
+
+/** 列表为空时的占位内容。
+ * 搜索模式区分「搜不到」和「请求失败」，两者都不是「读完了」，
+ * 不能复用「没有更多文章了」——那是给已读完列表的文案。 */
+function ListEmptyState({
+  isSearchMode,
+  searchStatus,
+  searchKeyword,
+}: {
+  isSearchMode: boolean;
+  searchStatus: 'idle' | 'no-results' | 'error';
+  searchKeyword: string;
+}) {
+  if (isSearchMode && searchStatus === 'error') {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
+        <SearchX size={28} className="text-border-strong" />
+        <p className="text-[13px] text-secondary">搜索失败，请检查网络连接后重试</p>
+      </div>
+    );
+  }
+  if (isSearchMode && searchStatus === 'no-results') {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
+        <SearchX size={28} className="text-border-strong" />
+        <p className="text-[13px] text-secondary">没有找到与「{searchKeyword}」相关的文章</p>
+        <p className="text-[12px] text-muted">试试更短的关键词，或检查输入是否有误</p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
+      <CheckCheck size={28} className="text-border-strong" />
+      <p className="text-[13px] text-muted">没有更多文章了</p>
+    </div>
+  );
+}
 
 // ---- 未读时间分层（T-v03-05）----
 // "今天 / 本周"一律按用户本地时区（系统时区）计算，本周期起点为周一。
@@ -80,6 +117,8 @@ interface Props {
   settings: AppSettings;
   searchKeyword?: string;
   isSearchMode?: boolean;
+  /** 搜索结果空态类型：no-results = 搜不到，error = 请求失败 */
+  searchStatus?: 'idle' | 'no-results' | 'error';
   multiSelectMode?: boolean;
   selectedIds?: number[];
   onSelectItem: (item: Item) => void;
@@ -115,6 +154,7 @@ export default function ArticleList({
   settings,
   searchKeyword = '',
   isSearchMode = false,
+  searchStatus = 'idle',
   multiSelectMode = false,
   selectedIds = [],
   onSelectItem,
@@ -424,12 +464,9 @@ export default function ArticleList({
         onContextMenu={handleListContextMenu}
       >
         {loading ? (
-          <Loading text="正在加载文章列表..." fullHeight />
+          <Loading text="正在加载文章列表……" fullHeight />
         ) : visibleItems.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center">
-            <CheckCheck size={28} className="text-border-strong" />
-            <p className="text-[13px] text-muted">没有更多文章了</p>
-          </div>
+          <ListEmptyState isSearchMode={isSearchMode} searchStatus={searchStatus} searchKeyword={searchKeyword} />
         ) : (
           visibleItems.map((item, idx) => (
             <ArticleRow
@@ -621,7 +658,7 @@ const ArticleRow = React.memo(function ArticleRow({
   const descText = useMemo(() => {
     if (!item.desc || !settings.listShowPreview) return '';
     const text = stripHtml(item.desc);
-    return text.length > 120 ? text.slice(0, 120) + '...' : text;
+    return text.length > 120 ? text.slice(0, 120) + '……' : text;
   }, [item.desc, settings.listShowPreview]);
 
   // 根据列表密度调整 padding/字号

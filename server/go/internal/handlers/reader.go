@@ -103,6 +103,9 @@ func rateLimitMiddleware(rl *rateLimiter) gin.HandlerFunc {
 	}
 }
 
+// DefaultPort 后端默认监听端口（PORT 环境变量缺失时使用），backend 组装层与本包共用
+const DefaultPort = "3002"
+
 // ReaderHandler 阅读器 HTTP 处理器
 type ReaderHandler struct {
 	service     *services.ReaderService
@@ -110,23 +113,22 @@ type ReaderHandler struct {
 	// baseURL 是后端服务的可信基础地址（scheme://host:port），
 	// 用于代理端点重写 URL，避免使用客户端可控的 Host 头
 	baseURL string
-	// frameCheckCache 缓存原文是否可被 iframe 直接嵌入（基于 X-Frame-Options / CSP frame-ancestors 预检），
-	// 避免重复文章重复网络预检。有容量上限（frameCheckCacheMax），超出按 FIFO 淘汰，防止长期运行内存膨胀。
-	frameCheckCacheMu sync.Mutex
-	frameCheckCache   map[string]frameCheckResult
-	frameCheckOrder   []string
+	// frameChecker 缓存原文是否可被 iframe 直接嵌入（基于 X-Frame-Options / CSP frame-ancestors 预检），
+	// 避免重复文章重复网络预检。有容量上限，超出按 FIFO 淘汰，防止长期运行内存膨胀。
+	frameChecker *services.FrameChecker
 }
 
 // NewReaderHandler 创建处理器
 func NewReaderHandler() *ReaderHandler {
 	return &ReaderHandler{
-		service:         services.NewReaderService(),
-		baseURL:         resolveBackendBaseURL(),
-		frameCheckCache: make(map[string]frameCheckResult),
+		service:      services.NewReaderService(),
+		baseURL:      resolveBackendBaseURL(),
+		frameChecker: services.NewFrameChecker(frameCheckCacheMax),
 	}
 }
 
-// frameCheckCacheMax frameCheckCache 最大条目数，超出后按 FIFO 淘汰最旧条目。
+// resolveBackendBaseURL 从环境变量构建可信的后端基础地址；
+// PORT=0（动态端口）时回读 FLORE_PORT_FILE 得到实际端口。
 func resolveBackendBaseURL() string {
 	bindAddr := os.Getenv("BIND_ADDR")
 	if bindAddr == "" {
@@ -134,7 +136,7 @@ func resolveBackendBaseURL() string {
 	}
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "3002"
+		port = DefaultPort
 	}
 	// PORT=0（动态端口）时，实际端口由系统分配并写入 FLORE_PORT_FILE（见 backend.Start 的 listener 绑定段）。
 	// 此时回读文件以得到正确端口，避免 baseURL 固化为 "http://127.0.0.1:0" 导致代理 URL 失效（M-P1）。

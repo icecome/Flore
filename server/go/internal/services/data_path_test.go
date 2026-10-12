@@ -36,10 +36,12 @@ func newTestService(t *testing.T) *ReaderService {
 		&models.Setting{},
 		&models.FilterRule{},
 		&models.SourceHealth{},
+		&models.ReadabilityCache{},
 	); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
-	return &ReaderService{db: db, indexChan: make(chan int, 256)}
+	// 注入式构造：不启动后台 goroutine，不依赖全局 database.DB
+	return NewReaderServiceWithDB(db)
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }

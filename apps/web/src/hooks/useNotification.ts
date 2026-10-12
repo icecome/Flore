@@ -37,19 +37,19 @@ export function useNotification({ notifyEnabled, notifyBatchMin, unreadCountInSc
       return;
     }
     if (Notification.permission === 'denied') {
-      showToast('通知权限已被拒绝，无法推送新文章通知'); // m-01 反馈
+      showToast('通知权限已被拒绝，无法推送新文章通知', 'error'); // m-01 反馈
       return;
     }
     if (Notification.permission === 'default') {
       try {
         const perm = await Notification.requestPermission();
         if (perm !== 'granted') {
-          showToast('未授予通知权限，无法推送新文章通知'); // m-01
+          showToast('未授予通知权限，无法推送新文章通知', 'error'); // m-01
           return;
         }
       } catch (err) {
         console.error('Failed to request notification permission:', err);
-        showToast('通知权限请求失败，无法推送新文章通知');
+        showToast('通知权限请求失败，无法推送新文章通知', 'error');
         return;
       }
     }

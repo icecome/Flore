@@ -560,14 +560,12 @@ func TestFileProviderNotConfigured(t *testing.T) {
 	}
 }
 
-// TestFileProviderS3NotSupported S3 后端尚未实现应报明确错误
-func TestFileProviderS3NotSupported(t *testing.T) {
-	service, engine, _ := newSyncEngineTest(t)
-	if err := service.UpdateSettings(map[string]string{"sync_file_provider": "s3"}); err != nil {
-		t.Fatalf("update settings: %v", err)
-	}
-	err := engine.TestFileConnection()
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected not-supported error, got %v", err)
+// TestFileProviderS3Rejected 未实现的文件后端必须在配置写入阶段就被拒绝，
+// 不能先收下凭证再在运行时才报错。
+func TestFileProviderS3Rejected(t *testing.T) {
+	service, _, _ := newSyncEngineTest(t)
+	err := service.UpdateSyncConfig(map[string]string{"sync_file_provider": "s3"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported file provider") {
+		t.Fatalf("expected unsupported-provider error at config time, got %v", err)
 	}
 }

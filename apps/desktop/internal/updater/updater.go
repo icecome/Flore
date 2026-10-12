@@ -14,6 +14,9 @@ type UpdateInfo struct {
 	FileName       string   `json:"fileName"`
 	SHA256         string   `json:"sha256"`
 	URLs           []string `json:"urls"`
+	// Forced 表示当前版本低于 manifest.minSupported，属于强制更新场景，
+	// 前端应提升提示优先级（如禁止静默忽略）。
+	Forced bool `json:"forced"`
 }
 
 // CheckForUpdate 拉取 manifest 并比对当前版本；无更新返回 (nil, nil)。
@@ -22,24 +25,32 @@ func CheckForUpdate(currentVersion string) (*UpdateInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if manifest.Latest == "" {
+	return buildUpdateInfo(manifest, currentVersion)
+}
+
+// buildUpdateInfo 由 manifest 与当前版本构造更新信息（纯函数，便于单测）。
+// 无可用更新返回 (nil, nil)；manifest 缺字段或无平台资产时返回错误。
+func buildUpdateInfo(m *Manifest, currentVersion string) (*UpdateInfo, error) {
+	if m.Latest == "" {
 		return nil, fmt.Errorf("manifest 缺少 latest 字段")
 	}
-	if CompareVersion(manifest.Latest, currentVersion) <= 0 {
+	if CompareVersion(m.Latest, currentVersion) <= 0 {
 		return nil, nil
 	}
-	asset := matchAsset(manifest)
+	asset := matchAsset(m)
 	if asset == nil {
 		return nil, fmt.Errorf("未找到适配平台 %s 的更新资产", currentPlatform())
 	}
+	forced := m.MinSupported != "" && CompareVersion(currentVersion, m.MinSupported) < 0
 	return &UpdateInfo{
 		CurrentVersion: currentVersion,
-		LatestVersion:  manifest.Latest,
-		Notes:          manifest.Notes,
+		LatestVersion:  m.Latest,
+		Notes:          m.Notes,
 		Size:           asset.Size,
 		FileName:       asset.FileName,
 		SHA256:         asset.SHA256,
 		URLs:           asset.URLs,
+		Forced:         forced,
 	}, nil
 }
 

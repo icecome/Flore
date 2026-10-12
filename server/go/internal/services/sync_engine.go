@@ -245,19 +245,17 @@ func (e *SyncEngine) TestConnection() error {
 	return provider.HealthCheck(ctx)
 }
 
-// TestFileConnection 检测文件后端（WebDAV / S3）连通性。
-// 仅做可达性与认证探活，不校验存储内容；S3 后端尚未实现，返回明确错误。
+// TestFileConnection 检测文件后端（WebDAV）连通性。
+// 仅做可达性与认证探活，不校验存储内容。
 func (e *SyncEngine) TestFileConnection() error {
 	provider := e.service.GetSetting("sync_file_provider")
 	switch provider {
 	case "webdav":
 		return e.testWebDAVConnection()
-	case "s3":
-		return fmt.Errorf("file provider \"s3\" not supported yet")
 	case "":
 		return fmt.Errorf("file provider not configured")
 	default:
-		return fmt.Errorf("file provider %q not supported yet", provider)
+		return fmt.Errorf("file provider %q not supported", provider)
 	}
 }
 

@@ -621,12 +621,3 @@ func (s *ReaderService) upsertSingleItem(tx *gorm.DB, sourceID int, it FeedItem,
 	}
 	return newItem.ID, true, nil
 }
-
-func (s *ReaderService) applyFiltersAndIndex(itemID int) {
-	if err := s.ApplyFilterRules(itemID); err != nil {
-		slog.Warn("apply filter rules failed for item", "item_id", itemID, "error", err)
-	}
-	if err := s.IndexItemForSearch(itemID); err != nil {
-		slog.Warn("index item failed", "item_id", itemID, "error", err)
-	}
-}

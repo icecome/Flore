@@ -41,12 +41,16 @@ interface WailsApp {
   GetAPIToken?: () => Promise<string>;
   /** 检查更新，返回更新信息或 null（无更新）；仅桌面端可用 */
   CheckForUpdate?: () => Promise<UpdateInfo | null>;
-  /** 应用已检查的更新（会触发应用重启） */
+  /** 后台下载已确认的更新（非阻塞），下载完成前即返回 */
   StartUpdate?: () => Promise<void>;
   /** 读取后台缓存的更新检查结果，无则返回 null */
   GetCachedUpdate?: () => Promise<UpdateInfo | null>;
-  /** 读取当前更新下载进度（0~1） */
+  /** 读取当前更新下载进度（0~1），无进行中为 0 */
   GetUpdateProgress?: () => Promise<number>;
+  /** 读取更新流程当前快照（状态/进度/错误），崩溃时复原展示 */
+  GetUpdateSnapshot?: () => Promise<UpdateState>;
+  /** 在更新下载完成（ready）后确认重启并应用更新 */
+  ConfirmRestart?: () => Promise<void>;
   /** 返回当前操作系统标识（"windows"、"darwin"、"linux"） */
   GetPlatform?: () => Promise<string>;
 }
@@ -133,18 +137,18 @@ export function openExternal(url: string): void {
   try {
     const u = new URL(url);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-      showToast('仅支持打开 http/https 链接');
+      showToast('仅支持打开 http/https 链接', 'error');
       return;
     }
   } catch {
-    showToast('无效的链接');
+    showToast('无效的链接', 'error');
     return;
   }
   const app = getWailsApp();
   if (app?.OpenExternal) {
     app.OpenExternal(url).catch((err) => {
       console.error('Failed to open external:', err);
-      showToast('调用系统浏览器失败，已尝试在新窗口打开');
+      showToast('调用系统浏览器失败，已尝试在新窗口打开', 'error');
       // 回退到 window.open，避免用户点击无反应
       window.open(url, '_blank', 'noopener,noreferrer');
     });
@@ -651,34 +655,59 @@ export interface UpdateInfo {
   size: number;
   fileName: string;
   urls: string[];
+  /** 当前版本低于 manifest.minSupported 时为 true（强制更新场景） */
+  forced: boolean;
 }
 
-/** 检查更新（仅桌面端），Web 端无更新能力时返回 null */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+/** 更新流程状态（与后端 updatelet.State 对齐） */
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'pendingRestart'
+  | 'error';
+
+/** 更新流程快照（与后端 updatelet.State 对齐） */
+export interface UpdateState {
+  status: UpdateStatus;
+  info: UpdateInfo | null;
+  progress: number;
+  error?: string;
+}
+
+/** 更新事件名：后端在每次状态变更时推送 updatelet.State */
+export const updateStateEvent = 'flore:update:state';
+
+/** 检查更新（仅桌面端），发起后台检查后立即返回（非阻塞） */
+export async function checkForUpdate(): Promise<void> {
   const app = getWailsApp();
-  if (!app?.CheckForUpdate) return null;
-  return app.CheckForUpdate();
+  if (!app?.CheckForUpdate) return;
+  await app.CheckForUpdate();
 }
 
-/** 应用已检查的更新（仅桌面端），会触发进程重启 */
+/** 后台下载已确认的更新（仅桌面端），下载完成前即返回（非阻塞） */
 export async function startUpdate(): Promise<void> {
   const app = getWailsApp();
   if (!app?.StartUpdate) throw new Error('当前环境不支持更新');
   await app.StartUpdate();
 }
 
-/** 读取后台已缓存的更新检查结果（仅桌面端），无则返回 null */
-export async function getCachedUpdate(): Promise<UpdateInfo | null> {
+/** 在更新下载完成（ready）后确认重启并应用更新（仅桌面端） */
+export async function confirmRestart(): Promise<void> {
   const app = getWailsApp();
-  if (!app?.GetCachedUpdate) return null;
-  return app.GetCachedUpdate();
+  if (!app?.ConfirmRestart) throw new Error('当前环境不支持更新');
+  await app.ConfirmRestart();
 }
 
-/** 读取当前更新下载进度（0~1），无进行中为 0 */
-export async function getUpdateProgress(): Promise<number> {
+/** 读取更新流程当前快照（仅桌面端），Web 端返回默认 idle 态 */
+export async function getUpdateSnapshot(): Promise<UpdateState> {
   const app = getWailsApp();
-  if (!app?.GetUpdateProgress) return 0;
-  return app.GetUpdateProgress();
+  if (!app?.GetUpdateSnapshot) {
+    return { status: 'idle', info: null, progress: 0 };
+  }
+  return app.GetUpdateSnapshot();
 }
 
 /** 图片代理前缀，供正文图片重写使用 */

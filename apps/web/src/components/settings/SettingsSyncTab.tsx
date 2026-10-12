@@ -10,6 +10,7 @@ import {
   alignSubscriptions,
 } from '../../utils/api';
 import { showToast } from '../../utils/toast';
+import { translateBackendError } from '../../utils/backendError';
 import { Section, Row, Toggle, Select, SmallBtn } from './SettingsShared';
 
 const INPUT_CLASS =
@@ -18,11 +19,6 @@ const INPUT_CLASS =
 const API_PROVIDER_OPTIONS = [
   { value: 'miniflux', label: 'Miniflux' },
   { value: 'greader', label: 'FreshRSS / GReader' },
-];
-
-const FILE_PROVIDER_OPTIONS = [
-  { value: 'webdav', label: 'WebDAV' },
-  { value: 's3', label: 'S3 兼容存储' },
 ];
 
 const WINDOW_DAY_OPTIONS = [
@@ -57,11 +53,6 @@ interface FormState {
   fileUrl: string;
   fileUsername: string;
   filePassword: string;
-  fileEndpoint: string;
-  fileRegion: string;
-  fileBucket: string;
-  fileAccessKey: string;
-  fileSecretKey: string;
   filePrefix: string;
   windowDays: number;
   pullInterval: number;
@@ -79,11 +70,6 @@ const toFormState = (config: SyncConfig): FormState => ({
   fileUrl: config.fileUrl ?? '',
   fileUsername: config.fileUsername ?? '',
   filePassword: config.filePassword ?? '',
-  fileEndpoint: config.fileEndpoint ?? '',
-  fileRegion: config.fileRegion ?? '',
-  fileBucket: config.fileBucket ?? '',
-  fileAccessKey: config.fileAccessKey ?? '',
-  fileSecretKey: config.fileSecretKey ?? '',
   filePrefix: config.filePrefix ?? '',
   windowDays: config.windowDays ?? 30,
   // 后端以秒存储，表单以分钟展示；0 表示仅手动
@@ -123,7 +109,7 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
         setStatus(syncStatus);
       } catch (err) {
         console.error('Failed to load sync config:', err);
-        showToast('获取同步配置失败');
+        showToast('获取同步配置失败', 'error');
       }
     };
     load();
@@ -152,11 +138,6 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
     sync_file_url: form.fileUrl,
     sync_file_username: form.fileUsername,
     sync_file_password: form.filePassword,
-    sync_file_endpoint: form.fileEndpoint,
-    sync_file_region: form.fileRegion,
-    sync_file_bucket: form.fileBucket,
-    sync_file_access_key: form.fileAccessKey,
-    sync_file_secret_key: form.fileSecretKey,
     sync_file_prefix: form.filePrefix,
     sync_window_days: String(form.windowDays),
     sync_pull_interval: String(form.pullInterval * 60),
@@ -170,7 +151,7 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
       return true;
     } catch (err) {
       console.error('Failed to save sync config:', err);
-      showToast('保存同步配置失败');
+      showToast('保存同步配置失败', 'error');
       return false;
     } finally {
       setSaving(false);
@@ -184,11 +165,11 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
     setTesting(true);
     try {
       await testSyncConnection();
-      showToast('连接成功');
+      showToast('连接成功', 'success');
     } catch (err) {
       // 透传后端错误文案（认证被拒/地址不可达等），便于用户定位
-      const message = err instanceof Error ? err.message : '';
-      showToast(message || '连接失败，请检查地址与凭证');
+      const message = translateBackendError(err instanceof Error ? err.message : '') ?? '';
+      showToast(message || '连接失败，请检查地址与凭证', 'error');
     } finally {
       setTesting(false);
     }
@@ -201,10 +182,10 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
     setFileTesting(true);
     try {
       await testFileConnectionApi();
-      showToast('连接成功');
+      showToast('连接成功', 'success');
     } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      showToast(message || '连接失败，请检查地址与凭证');
+      const message = translateBackendError(err instanceof Error ? err.message : '') ?? '';
+      showToast(message || '连接失败，请检查地址与凭证', 'error');
     } finally {
       setFileTesting(false);
     }
@@ -226,15 +207,15 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
       const result = await triggerSync();
       const parts = [`导入 ${result.feedsImported} 个源`];
       if (result.itemsUpserted > 0) parts.push(`更新 ${result.itemsUpserted} 篇文章`);
-      if (result.localOnlyUrls.length > 0) parts.push(`${result.localOnlyUrls.length} 个源待对齐`);
-      showToast(`同步完成：${parts.join('，')}`);
+      if (result.localOnlyUrls.length > 0) parts.push(`${result.localOnlyUrls.length} 个源仅在本地`);
+      showToast(`同步完成：${parts.join('，')}`, 'success');
       setAlignUrls(result.localOnlyUrls);
       setAlignChecked(new Set(result.localOnlyUrls));
       onSourcesChanged?.();
       await refreshStatus();
     } catch (err) {
       console.error('Sync failed:', err);
-      showToast(err instanceof Error && err.message ? err.message : '同步失败');
+      showToast(translateBackendError(err instanceof Error ? err.message : '') || '同步失败', 'error');
     } finally {
       setSyncing(false);
     }
@@ -247,7 +228,7 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
     setAligning(true);
     try {
       const result = await alignSubscriptions(urls);
-      showToast(`已推送 ${result.pushed} 个订阅到服务端`);
+      showToast(`已推送 ${result.pushed} 个订阅到服务端`, 'success');
       const pushed = new Set(urls);
       setAlignUrls((prev) => prev.filter((url) => !pushed.has(url)));
       // 同步清理勾选，避免残留导致按钮计数虚高
@@ -260,7 +241,7 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
       await refreshStatus();
     } catch (err) {
       console.error('Align subscriptions failed:', err);
-      showToast(err instanceof Error && err.message ? err.message : '推送订阅失败');
+      showToast(translateBackendError(err instanceof Error ? err.message : '') || '推送订阅失败', 'error');
     } finally {
       setAligning(false);
     }
@@ -380,127 +361,48 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
       <Section title="云端备份">
         <Row
           title="启用云端备份"
-          desc="将本地数据库整包备份到自有云端存储。"
+          desc="将本地数据库整包备份到自有 WebDAV 存储。"
           control={<Toggle checked={form.fileEnabled} onChange={(v) => patch({ fileEnabled: v })} />}
         />
         {form.fileEnabled && (
           <>
             <Row
-              title="存储类型"
+              title="WebDAV 地址"
               control={
-                <Select
-                  value={form.fileProvider}
-                  options={FILE_PROVIDER_OPTIONS}
-                  onChange={(v) => patch({ fileProvider: String(v) })}
+                <input
+                  type="text"
+                  value={form.fileUrl}
+                  onChange={(e) => patch({ fileUrl: e.target.value })}
+                  placeholder="https://cloud.example.com/dav"
+                  className={INPUT_CLASS}
                 />
               }
             />
-            {form.fileProvider === 'webdav' ? (
-              <>
-                <Row
-                  title="WebDAV 地址"
-                  control={
-                    <input
-                      type="text"
-                      value={form.fileUrl}
-                      onChange={(e) => patch({ fileUrl: e.target.value })}
-                      placeholder="https://cloud.example.com/dav"
-                      className={INPUT_CLASS}
-                    />
-                  }
+            <Row
+              title="用户名"
+              control={
+                <input
+                  type="text"
+                  value={form.fileUsername}
+                  onChange={(e) => patch({ fileUsername: e.target.value })}
+                  placeholder="账号"
+                  className={INPUT_CLASS}
                 />
-                <Row
-                  title="用户名"
-                  control={
-                    <input
-                      type="text"
-                      value={form.fileUsername}
-                      onChange={(e) => patch({ fileUsername: e.target.value })}
-                      placeholder="账号"
-                      className={INPUT_CLASS}
-                    />
-                  }
+              }
+            />
+            <Row
+              title="密码"
+              desc={passwordHint(form.filePassword)}
+              control={
+                <input
+                  type="password"
+                  value={form.filePassword}
+                  onChange={(e) => patch({ filePassword: e.target.value })}
+                  placeholder="密码或应用密码"
+                  className={INPUT_CLASS}
                 />
-                <Row
-                  title="密码"
-                  desc={passwordHint(form.filePassword)}
-                  control={
-                    <input
-                      type="password"
-                      value={form.filePassword}
-                      onChange={(e) => patch({ filePassword: e.target.value })}
-                      placeholder="密码或应用密码"
-                      className={INPUT_CLASS}
-                    />
-                  }
-                />
-              </>
-            ) : (
-              <>
-                <Row
-                  title="Endpoint"
-                  control={
-                    <input
-                      type="text"
-                      value={form.fileEndpoint}
-                      onChange={(e) => patch({ fileEndpoint: e.target.value })}
-                      placeholder="https://s3.example.com"
-                      className={INPUT_CLASS}
-                    />
-                  }
-                />
-                <Row
-                  title="Region"
-                  control={
-                    <input
-                      type="text"
-                      value={form.fileRegion}
-                      onChange={(e) => patch({ fileRegion: e.target.value })}
-                      placeholder="us-east-1"
-                      className={INPUT_CLASS}
-                    />
-                  }
-                />
-                <Row
-                  title="Bucket"
-                  control={
-                    <input
-                      type="text"
-                      value={form.fileBucket}
-                      onChange={(e) => patch({ fileBucket: e.target.value })}
-                      placeholder="存储桶名称"
-                      className={INPUT_CLASS}
-                    />
-                  }
-                />
-                <Row
-                  title="Access Key"
-                  desc={passwordHint(form.fileAccessKey)}
-                  control={
-                    <input
-                      type="password"
-                      value={form.fileAccessKey}
-                      onChange={(e) => patch({ fileAccessKey: e.target.value })}
-                      placeholder="访问密钥"
-                      className={INPUT_CLASS}
-                    />
-                  }
-                />
-                <Row
-                  title="Secret Key"
-                  desc={passwordHint(form.fileSecretKey)}
-                  control={
-                    <input
-                      type="password"
-                      value={form.fileSecretKey}
-                      onChange={(e) => patch({ fileSecretKey: e.target.value })}
-                      placeholder="私有密钥"
-                      className={INPUT_CLASS}
-                    />
-                  }
-                />
-              </>
-            )}
+              }
+            />
             <Row
               title="备份路径前缀"
               control={
@@ -515,10 +417,10 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
             />
             <Row
               title="测试连接"
-              desc="验证云端存储地址与凭证是否有效。"
+              desc="验证 WebDAV 地址与凭证是否有效。"
               control={
                 <SmallBtn
-                  label={fileTesting ? '测试中...' : '测试连接'}
+                  label={fileTesting ? '测试中……' : '测试连接'}
                   disabled={fileTesting || saving}
                   onClick={runFileTest}
                 />
@@ -539,27 +441,27 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
                 disabled={testing || saving || !form.apiEnabled}
                 onClick={testConnection}
               />
-              <SmallBtn label={syncing ? '同步中...' : '立即同步'} disabled={syncing || saving || !form.apiEnabled} onClick={runSync} />
+              <SmallBtn label={syncing ? '同步中……' : '立即同步'} disabled={syncing || saving || !form.apiEnabled} onClick={runSync} />
             </div>
           }
         />
         <Row
           title="保存配置"
-          desc="保存当前同步设置（测试与同步前会自动保存）。"
+          desc="保存当前同步设置。点击「测试连接」或「立即同步」时会先自动保存。"
           control={
-            <SmallBtn label={saving ? '保存中...' : '保存'} disabled={saving} onClick={() => { void save(); }} />
+            <SmallBtn label={saving ? '保存中……' : '保存'} disabled={saving} onClick={() => { void save(); }} />
           }
         />
       </Section>
 
       {alignUrls.length > 0 && (
-        <Section title="订阅对齐">
+        <Section title="同步订阅">
           <div className="border-b border-border-subtle py-3">
             <div className="text-[13.5px] font-medium text-primary">
-              以下 {alignUrls.length} 个源仅存在于本地
+              以下 {alignUrls.length} 个订阅源仅存在于本地
             </div>
             <div className="mt-0.5 text-[12px] leading-snug text-muted">
-              勾选后推送到服务端，实现两边订阅一致。
+              勾选后推送到服务端，两端订阅保持一致。
             </div>
             <div className="mt-2 flex max-h-[200px] flex-col gap-0.5 overflow-y-auto">
               {alignUrls.map((url) => (
@@ -580,10 +482,10 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
           </div>
           <Row
             title="推送订阅"
-            desc="将勾选的本地源推送到服务端。"
+            desc="仅在本地存在的订阅源，推送到服务端后两端订阅一致。"
             control={
               <SmallBtn
-                label={aligning ? '推送中...' : `推送 ${alignChecked.size} 个源`}
+                label={aligning ? '推送中……' : `推送 ${alignChecked.size} 个源`}
                 disabled={aligning || alignChecked.size === 0}
                 onClick={pushAlign}
               />

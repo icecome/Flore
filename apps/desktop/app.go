@@ -18,8 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"desktop/internal/updater"
-
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -57,18 +55,6 @@ type App struct {
 	// apiToken 注入后端 FLORE_API_TOKEN，桌面壳自身请求敏感接口时携带（M5）。
 	apiToken string
 
-	// updateMu 保护 cachedUpdate，避免并发检查/应用更新竞态。
-	updateMu     sync.Mutex
-	cachedUpdate *updater.UpdateInfo
-	// updateProgress 当前更新下载进度 0~1（以 uint64 存 float64 位，兼容 Go 1.26），
-	// 原子访问，供前端轮询（GetUpdateProgress）。
-	updateProgress atomic.Uint64
-	// updateInFlight 防止 StartUpdate 并发调用：
-	// 关闭再开设置弹窗后，前端 mount 时会通过 GetUpdateProgress 同步"正在下载"状态，
-	// 正常路径不应发生重入；此处再次点击属于异常路径，直接拒绝以避免两份下载
-	// 抢同一个 temp 文件 / 进程被 Quit 中断，进而触发"下载失败"。
-	updateInFlight atomic.Bool
-
 	// 窗口行为设置缓存。startup 时预置默认值，之后只由后台 goroutine 刷新；
 	// 窗口控制路径（含运行在主 UI 线程的 OnBeforeClose）只读缓存，
 	// 不再存在「缓存未就绪 → 同步 HTTP」的 fallback 分支（M2）。
@@ -76,6 +62,7 @@ type App struct {
 	minimizeBehavior string
 	closeBehavior    string
 	notifyEnabled    bool
+	trayEnabled      bool
 
 	// notifyCancel 用于在 shutdown 时停止 startNotifyWatcher goroutine，
 	// 由 notifyMutex 保护（M7）。
@@ -87,6 +74,7 @@ type App struct {
 func NewApp() *App {
 	a := &App{}
 	a.logger = newLogFile(a.appDataDir())
+	initUpdateHost(a)
 	token, err := generateAPIToken()
 	if err != nil {
 		// fail-closed：随机源不可用时必须终止启动。
@@ -239,10 +227,13 @@ func (a *App) startup(ctx context.Context) {
 
 	// 预置窗口行为默认值并标记缓存就绪：窗口控制路径（最小化/关闭/OnBeforeClose）
 	// 从此永不发起同步 HTTP，杜绝在 Windows 主 UI 线程阻塞（M2）。
+	// trayEnabled 默认 true：托盘是「最小化/关闭到托盘」这两个行为的前提，
+	// 默认开启与 Windows 桌面应用的常规预期一致，用户可在设置中关闭。
 	a.settingsMutex.Lock()
 	a.minimizeBehavior = "taskbar"
 	a.closeBehavior = "quit"
 	a.notifyEnabled = false
+	a.trayEnabled = true
 	a.settingsMutex.Unlock()
 
 	// 设置窗口标题，覆盖 Wails 开发模式下的默认标题
@@ -264,15 +255,22 @@ func (a *App) startup(ctx context.Context) {
 	// 注册 Flore 到 Windows 注册表，使原生 Toast 显示应用名而非 wails.localhost
 	a.registerNotificationApp()
 
-	// 启动系统托盘
+	// 启动系统托盘。托盘是否可用由系统决定；是否显示由 trayEnabled 设置决定，
+	// 该设置在 loadWindowSettings 中从后端加载后同步到 applyTraySetting。
 	a.startTray()
+	a.applyTraySetting()
 
 	// 异步启动本地后端服务，避免阻塞 UI（健康检查最长 15s）
 	go a.startBackends()
 
-	// 若刚完成自动更新，提示用户
+	// 若刚完成自动更新，提示用户；marker 版本与当前不一致说明替换可能未生效
 	if v := a.consumeUpdateMarker(); v != "" {
-		_ = a.ShowNotification("Flore 已更新", "已更新到 v"+v)
+		if v == version {
+			_ = a.ShowNotification("Flore 已更新", "已更新到 v"+v)
+		} else {
+			a.logger.Printf("[update] marker version %s mismatch current %s, update may not be applied", v, version)
+			_ = a.ShowNotification("Flore 更新未完成", "目标 v"+v+"，当前 v"+version+"；可在设置-关于中重新检查更新")
+		}
 	}
 
 	// 启动后台通知监听：检测抓取完成并发送原生系统通知，覆盖托盘/调度盲区（M-A3）

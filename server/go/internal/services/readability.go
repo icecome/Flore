@@ -190,11 +190,6 @@ func init() {
 	}
 }
 
-// FetchReadability 抓取 URL 并使用阅读模式提取正文
-func FetchReadability(rawURL string) (*ReadabilityResult, error) {
-	return FetchReadabilityWithClient(rawURL, readabilityHTTPClient)
-}
-
 // FetchReadabilityWithClient 使用指定 HTTP 客户端抓取并提取正文
 func FetchReadabilityWithClient(rawURL string, client *http.Client) (*ReadabilityResult, error) {
 	if err := ValidateURLOnly(rawURL); err != nil {
@@ -240,14 +235,6 @@ func FetchReadabilityWithClient(rawURL string, client *http.Client) (*Readabilit
 		SiteName:    article.SiteName,
 		URL:         rawURL,
 	}, nil
-}
-
-// ProxyOriginal 抓取原文 HTML 并返回，用于在当前框架内显示
-func ProxyOriginal(rawURL string) (*http.Response, error) {
-	if err := ValidateURLOnly(rawURL); err != nil {
-		return nil, fmt.Errorf("url validation failed: %w", err)
-	}
-	return fetchHTMLWithClient(rawURL, readabilityHTTPClient)
 }
 
 // ProxyOriginalWithClient 使用指定 HTTP 客户端抓取原文 HTML

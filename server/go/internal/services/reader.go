@@ -63,23 +63,34 @@ var (
 	readerServiceOnce     sync.Once
 )
 
-// NewReaderService 创建阅读器服务（单例）
+// NewReaderService 创建阅读器服务（进程单例，启动后台索引 goroutine）。
+// 确保 handler 和 scheduler 共享同一个实例，数据库恢复后只需更新一次
+// db 引用即可同步所有调用方。
 func NewReaderService() *ReaderService {
 	readerServiceOnce.Do(func() {
-		s := &ReaderService{
-			db:            database.DB,
-			indexChan:     make(chan int, 2048),
-			indexOverflow: make(chan int, 8192),
-		}
-		s.proxySettingsSeq = s.loadProxySettingsSeq()
-		s.syncEngine = NewSyncEngine(s)
-		// 启动后台批量索引 goroutine，消费 indexChan 中的 itemID
-		go s.indexWorker()
-		// 启动溢出回送 goroutine，将 indexOverflow 中的 itemID 回送主通道，不阻塞抓取
-		go s.indexDrainer()
-		readerServiceInstance = s
+		readerServiceInstance = NewReaderServiceWithDB(database.DB)
+		readerServiceInstance.Start()
 	})
 	return readerServiceInstance
+}
+
+// NewReaderServiceWithDB 基于给定数据库连接构建 ReaderService，不启动后台
+// goroutine，供单元测试注入内存数据库使用。
+func NewReaderServiceWithDB(db *gorm.DB) *ReaderService {
+	s := &ReaderService{
+		db:            db,
+		indexChan:     make(chan int, 2048),
+		indexOverflow: make(chan int, 8192),
+	}
+	s.proxySettingsSeq = s.loadProxySettingsSeq()
+	s.syncEngine = NewSyncEngine(s)
+	return s
+}
+
+// Start 启动后台批量索引与溢出回送 goroutine；仅进程单例创建时调用一次。
+func (s *ReaderService) Start() {
+	go s.indexWorker()
+	go s.indexDrainer()
 }
 
 func (s *ReaderService) loadProxySettingsSeq() int64 {
@@ -93,12 +104,6 @@ func (s *ReaderService) getDb() *gorm.DB {
 	s.dbMu.RLock()
 	defer s.dbMu.RUnlock()
 	return s.db
-}
-
-func (s *ReaderService) setDb(db *gorm.DB) {
-	s.dbMu.Lock()
-	defer s.dbMu.Unlock()
-	s.db = db
 }
 
 // execLocked 在持有读锁期间执行 SQL。

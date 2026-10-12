@@ -32,8 +32,8 @@ interface Props {
 
 const SOURCE_FILTER_OPTIONS: { value: 'all' | 'ok' | 'bad'; label: string }[] = [
   { value: 'all', label: '全部' },
-  { value: 'ok', label: '可用' },
-  { value: 'bad', label: '超时' },
+  { value: 'ok', label: '正常' },
+  { value: 'bad', label: '异常' },
 ];
 
 export default function SettingsSourcesTab(props: Props) {
@@ -115,7 +115,7 @@ export default function SettingsSourcesTab(props: Props) {
                   if (xml) onImportOPML(xml);
                 }).catch((err: unknown) => {
                   console.error('PickOPMLFile failed:', err);
-                  showToast('选择 OPML 文件失败');
+                  showToast('选择 OPML 文件失败', 'error');
                 });
               } else {
                 fileInputRef.current?.click();
@@ -213,12 +213,12 @@ export default function SettingsSourcesTab(props: Props) {
                         className="inline-flex items-center gap-1 rounded-full bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-danger whitespace-nowrap"
                         title={
                           source.lastError
-                            ? `失败 ${source.fetchFailCount} 次: ${source.lastError}`
-                            : `失败 ${source.fetchFailCount} 次`
+                            ? `抓取失败 ${source.fetchFailCount} 次：${source.lastError}`
+                            : `抓取失败 ${source.fetchFailCount} 次`
                         }
                       >
                         <Circle size={7} fill="currentColor" />
-                        超时
+                        异常
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success whitespace-nowrap">

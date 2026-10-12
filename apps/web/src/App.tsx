@@ -15,12 +15,14 @@ import ExportArticlesModal, { type ExportScope } from './components/ExportArticl
 import Button from './components/Button';
 import ToastContainer from './components/ToastContainer';
 import UpdateBadge from './components/UpdateBadge';
+import useUpdate from './hooks/useUpdate';
 import ConfirmDialog from './components/ConfirmDialog';
 import ModalLayout from './components/ModalLayout';
 import type { Item, Source, Folder } from './types';
 import type { AppSettings } from './utils/settings';
-import { loadSettings, loadSettingsFromServer, saveSettings, applyAccentColor, migrateLegacySettingsIfNeeded } from './utils/settings';
+import { loadSettings, loadSettingsFromServer, saveSettings, applyAccentColor, applyAppTheme, watchSystemTheme, migrateLegacySettingsIfNeeded } from './utils/settings';
 import { showToast } from './utils/toast';
+import { translateBackendError } from './utils/backendError';
 
 import {
   downloadBlob,
@@ -42,8 +44,6 @@ import {
   importOPML,
   listSources,
   isDesktop,
-  checkForUpdate,
-  type UpdateInfo,
 } from './utils/api';
 import { useSourcesData } from './hooks/useSourcesData';
 import { useItemsData, type ItemFilter } from './hooks/useItemsData';
@@ -67,6 +67,17 @@ function App() {
     applyAccentColor(settings.accentColor || '#7B68EE');
   }, [settings.accentColor]);
 
+  // 应用深浅色主题。
+  // index.html 的预 paint 脚本已从 localStorage 的 'theme' 设置了首帧 data-theme，
+  // 此处负责后续：设置从后端加载后 appTheme 可能变化（跨设备同步），system 模式还要跟随 OS 实时切换。
+  useEffect(() => {
+    applyAppTheme(settings.appTheme);
+  }, [settings.appTheme]);
+
+  useEffect(() => {
+    return watchSystemTheme(() => settings.appTheme);
+  }, [settings.appTheme]);
+
   // 启动后从后端加载设置，并执行一次性 localStorage 迁移
   // 失败时静默，保留 localStorage 中的配置继续使用
   const [serverSettingsLoaded, setServerSettingsLoaded] = useState(false);
@@ -87,8 +98,9 @@ function App() {
   }, []);
 
   // 启动时静默检查更新（T-v03-02）：桌面端 + 开关开启 + 距上次检查超过 3 天
-  // 有新版本时通过角落轻提示告知，不弹窗打断阅读
-  const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
+  // 有新版本时通过角落轻提示告知，不弹窗打断阅读。
+  // 检查通过全局 useUpdate 仓库发起（后台非阻塞），Badge 与设置面板共享同一状态。
+  const updateStore = useUpdate();
   const startupUpdateCheckDoneRef = useRef(false);
   useEffect(() => {
     if (!serverSettingsLoaded || startupUpdateCheckDoneRef.current) return;
@@ -96,10 +108,19 @@ function App() {
     if (!isDesktop() || !settings.updateCheckOnStartup) return;
     if (Date.now() - settings.lastUpdateCheckAt < UPDATE_CHECK_INTERVAL_MS) return;
     handleSettingsChange({ ...settings, lastUpdateCheckAt: Date.now() });
-    checkForUpdate()
-      .then((info) => { if (info) setAvailableUpdate(info); })
-      .catch((err) => console.error('Startup update check failed:', err));
-  }, [serverSettingsLoaded, settings, handleSettingsChange]);
+    updateStore.check().catch((err) => console.error('Startup update check failed:', err));
+  }, [serverSettingsLoaded, settings, handleSettingsChange, updateStore]);
+
+  // 自动下载策略：检查发现新版后（含手动检查）若开关开启，自动开始后台下载。
+  // 仅对 available 状态触发一次；下载完成后仍需用户确认重启，不会自动退出应用。
+  const autoDownloadStartedRef = useRef(false);
+  useEffect(() => {
+    if (!isDesktop() || !settings.updateAutoDownload) return;
+    if (updateStore.snapshot.status !== 'available') return;
+    if (autoDownloadStartedRef.current) return;
+    autoDownloadStartedRef.current = true;
+    updateStore.download().catch((err) => console.error('Auto download failed:', err));
+  }, [updateStore.snapshot.status, settings.updateAutoDownload, updateStore]);
 
   const [selectedSourceId, setSelectedSourceId] = useState<number | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
@@ -178,9 +199,9 @@ function App() {
 
   const {
     items, totalCount, readLaterCount, starredCount, loadingItems,
-    searchKeyword, isSearchMode,
+    searchKeyword, isSearchMode, searchStatus,
     setSearchKeyword, setIsSearchMode, setItems,
-    fetchItems, loadMore, hasMore, loadingMore, fetchItemCount, fetchReadLaterCount, fetchStarredCount, fetchSearchItems,
+    fetchItems, loadMore, hasMore, loadingMore, fetchItemCount, fetchReadLaterCount, fetchStarredCount,
   } = useItemsData({
     selectedSourceId, selectedFolderId, filter, settings,
     fetchUnreadCount, abortRef, setSelectedItem,
@@ -242,7 +263,7 @@ function App() {
       saveBlobAsFile(blob, `articles-${new Date().toISOString().slice(0, 10)}.${ext}`);
     } catch (err) {
       console.error('Failed to export articles:', err);
-      showToast(err instanceof Error ? err.message : '导出失败');
+      showToast(translateBackendError(err instanceof Error ? err.message : '') ?? '导出失败', 'error');
     }
   }, []);
 
@@ -265,7 +286,7 @@ function App() {
     // 浏览器打开模式：直接在外部浏览器打开，不进入阅读器
     if (settings.openArticleMode === 'browser') {
       if (item.link) openExternal(item.link);
-      showToast('已在浏览器打开');
+      showToast('已在浏览器打开', 'success');
       return;
     }
 
@@ -280,7 +301,7 @@ function App() {
         updateSourceUnreadCount(item.sourceId, -1);
       } catch (err) {
         console.error('Failed to mark read:', err);
-        showToast('标记已读失败');
+        showToast('标记已读失败', 'error');
       }
     }
   }, [settings.openArticleMode, isMobile, updateItemReadState, updateSourceUnreadCount]);
@@ -291,7 +312,7 @@ function App() {
       await setItemStarred(id, starred);
     } catch (err) {
       console.error('Failed to toggle star:', err);
-      showToast(starred ? '收藏失败' : '取消收藏失败');
+      showToast(starred ? '收藏失败' : '取消收藏失败', 'error');
       return;
     }
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isStarred: starred } : i)));
@@ -306,7 +327,7 @@ function App() {
       await setItemReadLater(id, readLater);
     } catch (err) {
       console.error('Failed to toggle read later:', err);
-      showToast(readLater ? '添加稍后阅读失败' : '取消稍后阅读失败');
+      showToast(readLater ? '添加稍后阅读失败' : '取消稍后阅读失败', 'error');
       return;
     }
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, isReadLater: readLater } : i)));
@@ -331,7 +352,7 @@ function App() {
       await setItemRead(id, read);
     } catch (err) {
       console.error('Failed to toggle read:', err);
-      showToast(read ? '标记已读失败' : '标记未读失败');
+      showToast(read ? '标记已读失败' : '标记未读失败', 'error');
       return;
     }
     updateItemReadState(id, read);
@@ -355,9 +376,13 @@ function App() {
   const handleKeyboardShortcut = (e: KeyboardEvent) => {
     switch (e.key) {
       case 'ArrowDown':
+      case 'j':
+      case 'J':
         handleArrowDown(e);
         break;
       case 'ArrowUp':
+      case 'k':
+      case 'K':
         handleArrowUp(e);
         break;
       case 'Enter':
@@ -449,33 +474,36 @@ function App() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // 用 ref 保存最新引用，避免回调（如 refreshAllData）使用过期闭包
-  const fetchItemsRef = useRef(fetchItems);
-  const fetchSourcesRef = useRef(fetchSources);
-  const fetchFoldersRef = useRef(fetchFolders);
-  const fetchItemCountRef = useRef(fetchItemCount);
-  const fetchUnreadCountRef = useRef(fetchUnreadCount);
-  const fetchReadLaterCountRef = useRef(fetchReadLaterCount);
-  const fetchStarredCountRef = useRef(fetchStarredCount);
-  useEffect(() => { fetchItemsRef.current = fetchItems; }, [fetchItems]);
-  useEffect(() => { fetchSourcesRef.current = fetchSources; }, [fetchSources]);
-  useEffect(() => { fetchFoldersRef.current = fetchFolders; }, [fetchFolders]);
-  useEffect(() => { fetchItemCountRef.current = fetchItemCount; }, [fetchItemCount]);
-  useEffect(() => { fetchUnreadCountRef.current = fetchUnreadCount; }, [fetchUnreadCount]);
-  useEffect(() => { fetchReadLaterCountRef.current = fetchReadLaterCount; }, [fetchReadLaterCount]);
-  useEffect(() => { fetchStarredCountRef.current = fetchStarredCount; }, [fetchStarredCount]);
+  // 用单一 ref 对象保存各数据刷新函数的最新引用，避免回调（如 refreshAllData）使用过期闭包。
+  // 与 keyboardHandlerRef 相同惯例：每次渲染直接更新 current（幂等赋值），无需逐项 effect 同步。
+  const fetchersRef = useRef({
+    fetchItems,
+    fetchSources,
+    fetchFolders,
+    fetchItemCount,
+    fetchUnreadCount,
+    fetchReadLaterCount,
+    fetchStarredCount,
+  });
+  fetchersRef.current = {
+    fetchItems,
+    fetchSources,
+    fetchFolders,
+    fetchItemCount,
+    fetchUnreadCount,
+    fetchReadLaterCount,
+    fetchStarredCount,
+  };
 
   const refreshAllData = useCallback(async () => {
     await Promise.all([
-      fetchItemsRef.current(),
+      fetchersRef.current.fetchItems(),
       // 优化：抓取完成后只需刷新文章列表和相关计数
-      // 不再调用 fetchSourcesRef/fetchFoldersRef，因为它们仅在源/文件夹结构变更时才需要
-      // fetchSourcesRef.current(),
-      // fetchFoldersRef.current(),
-      fetchItemCountRef.current(),
-      fetchUnreadCountRef.current(),
-      fetchReadLaterCountRef.current(),
-      fetchStarredCountRef.current(),
+      // 不再刷新 sources/folders，它们仅在源/文件夹结构变更时才需要
+      fetchersRef.current.fetchItemCount(),
+      fetchersRef.current.fetchUnreadCount(),
+      fetchersRef.current.fetchReadLaterCount(),
+      fetchersRef.current.fetchStarredCount(),
     ]);
   }, []);
 
@@ -498,36 +526,43 @@ function App() {
   // 单一数据源：全局 state 之外不保留副本，所有变更入口收敛到本函数。
   const refreshSourceStructure = useCallback(async () => {
     await Promise.all([
-      fetchSourcesRef.current(),
-      fetchFoldersRef.current(),
-      fetchUnreadCountRef.current(undefined),
-      fetchItemsRef.current(),
-      fetchItemCountRef.current(),
+      fetchersRef.current.fetchSources(),
+      fetchersRef.current.fetchFolders(),
+      fetchersRef.current.fetchUnreadCount(undefined),
+      fetchersRef.current.fetchItems(),
+      fetchersRef.current.fetchItemCount(),
     ]);
   }, []);
 
-  // 从 URL 提取域名作为文件夹名称
-  const getDomainFolderName = (url: string): string => {
+  // 从 URL 提取域名作为文件夹名称。
+  // 解析失败时不返回「未分类」：那会真的创建一个名为「未分类」的文件夹，
+  // 与「未分组」（folderId 为 null）这一既有概念冲突。改为不复用「未分类」字样。
+  const getDomainFolderName = (url: string): string | null => {
     try {
       const hostname = new URL(url).hostname;
-      return hostname.replace(/^www\./, '').split('.')[0];
+      return hostname.replace(/^www\./, '').split('.')[0] || null;
     } catch {
-      return '未分类';
+      return null;
     }
   };
 
-  // 查找或创建文件夹（用于自动分组）；folders 从 ref 读取，保持回调引用稳定。
+  // 查找或创建文件夹（用于自动分组）；folders/sources 从 ref 读取，保持回调引用稳定。
   // 避免渲染期写 ref，改为 effect 中同步最新值。
   const foldersRef = useRef(folders);
   useEffect(() => {
     foldersRef.current = folders;
   }, [folders]);
 
+  const sourcesRef = useRef(sources);
+  useEffect(() => {
+    sourcesRef.current = sources;
+  }, [sources]);
+
   const ensureFolder = useCallback(async (name: string): Promise<number> => {
     const existing = foldersRef.current.find((f) => f.name === name);
     if (existing) return existing.id;
     const created = await createFolder(name);
-    await fetchFoldersRef.current();
+    await fetchersRef.current.fetchFolders();
     return created.id;
   }, []);
 
@@ -535,7 +570,11 @@ function App() {
   const buildSourcePayload = useCallback(async (data: SourceFormData): Promise<SourceFormData> => {
     const payload: SourceFormData = { ...data };
     if (settings.autoGroup && !payload.folderId) {
-      payload.folderId = await ensureFolder(getDomainFolderName(data.url));
+      const folderName = getDomainFolderName(data.url);
+      // 域名解析失败时保持「未分组」，而不是建一个叫「未分类」的文件夹
+      if (folderName) {
+        payload.folderId = await ensureFolder(folderName);
+      }
     }
     return payload;
   }, [settings.autoGroup, ensureFolder]);
@@ -546,18 +585,18 @@ function App() {
       payload = await buildSourcePayload(data);
     } catch (err) {
       console.error('Failed to prepare source:', err);
-      showToast('创建失败');
+      showToast('创建失败', 'error');
       return;
     }
     try {
       await createSource(payload);
     } catch (err) {
       console.error('Failed to create source:', err);
-      showToast(err instanceof Error ? err.message : '创建失败');
+      showToast(translateBackendError(err instanceof Error ? err.message : '') ?? '创建失败', 'error');
       return;
     }
     setShowAddModal(false);
-    await fetchSourcesRef.current();
+    await fetchersRef.current.fetchSources();
   }, [buildSourcePayload]);
 
   // 创建文件夹
@@ -572,10 +611,10 @@ function App() {
     if (!name) return;
     try {
       await createFolder(name);
-      await fetchFoldersRef.current();
+      await fetchersRef.current.fetchFolders();
     } catch (err) {
       console.error('Failed to create folder:', err);
-      showToast('创建文件夹失败');
+      showToast('创建文件夹失败', 'error');
     }
   }, [createFolderName]);
 
@@ -584,10 +623,10 @@ function App() {
     if (!renameTarget || renameTarget.type !== 'folder') return;
     try {
       await renameFolder(renameTarget.item.id, value);
-      await fetchFoldersRef.current();
+      await fetchersRef.current.fetchFolders();
     } catch (err) {
       console.error('Failed to rename folder:', err);
-      showToast('重命名失败');
+      showToast('重命名失败', 'error');
     }
   }, [renameTarget]);
 
@@ -601,10 +640,10 @@ function App() {
         try {
           await deleteFolder(id);
           setSelectedFolderId((prev) => (prev === id ? null : prev));
-          await Promise.all([fetchFoldersRef.current(), fetchSourcesRef.current()]);
+          await Promise.all([fetchersRef.current.fetchFolders(), fetchersRef.current.fetchSources()]);
         } catch (err) {
           console.error('Failed to delete folder:', err);
-          showToast('删除失败');
+          showToast('删除失败', 'error');
         }
       },
     });
@@ -615,10 +654,10 @@ function App() {
     if (!renameTarget || renameTarget.type !== 'source') return;
     try {
       await updateSource(renameTarget.item.id, { name: value });
-      await fetchSourcesRef.current();
+      await fetchersRef.current.fetchSources();
     } catch (err) {
       console.error('Failed to rename source:', err);
-      showToast('重命名失败');
+      showToast('重命名失败', 'error');
     }
   }, [renameTarget]);
 
@@ -628,10 +667,10 @@ function App() {
       await updateSource(sourceId, { folderId });
     } catch (err) {
       console.error('Failed to move source:', err);
-      showToast('移动失败');
+      showToast('移动失败', 'error');
       return;
     }
-    await fetchSourcesRef.current();
+    await fetchersRef.current.fetchSources();
   }, []);
 
   const handleDeleteSource = useCallback((id: number) => {
@@ -644,7 +683,7 @@ function App() {
           await deleteSource(id);
         } catch (err) {
           console.error('Failed to delete source:', err);
-          showToast('删除失败');
+          showToast('删除失败', 'error');
           return;
         }
         setSelectedSourceId((prev) => (prev === id ? null : prev));
@@ -653,16 +692,33 @@ function App() {
     });
   }, [refreshSourceStructure]);
 
-  // 全部标为已读（支持全部文章 / 文件夹 / 单个订阅源）
-  const handleMarkAllRead = useCallback(async (scope: { sourceId?: number; folderId?: number }) => {
-    try {
-      await markAllRead(scope);
-      await Promise.all([fetchSourcesRef.current(), fetchItemsRef.current(), fetchItemCountRef.current()]);
-    } catch (err) {
-      console.error('Failed to mark all read:', err);
-      showToast('标记失败');
-    }
-  }, []);
+  // 全部标为已读（支持全部文章 / 文件夹 / 单个订阅源）。
+  // 该操作不可撤销且会清空未读边界，因此先确认再执行：作用域内的未读数一并写入提示，
+  // 让用户在执行前能判断影响范围。
+  const handleMarkAllRead = useCallback((scope: { sourceId?: number; folderId?: number }) => {
+    const scopeLabel = scope.sourceId !== undefined
+      ? `「${sourcesRef.current.find((s) => s.id === scope.sourceId)?.name ?? '该订阅源'}」`
+      : scope.folderId !== undefined
+        ? `「${foldersRef.current.find((f) => f.id === scope.folderId)?.name ?? '该文件夹'}」`
+        : '全部';
+    const scopeUnread = scope.sourceId !== undefined
+      ? (sourcesRef.current.find((s) => s.id === scope.sourceId)?.unreadCount ?? 0)
+      : unreadCountInScope;
+
+    setConfirmAction({
+      message: `确定将${scopeLabel}的 ${scopeUnread} 篇未读文章标记为已读？此操作无法撤销。`,
+      onConfirm: async () => {
+        setConfirmAction(null);
+        try {
+          await markAllRead(scope);
+          await Promise.all([fetchersRef.current.fetchSources(), fetchersRef.current.fetchItems(), fetchersRef.current.fetchItemCount()]);
+        } catch (err) {
+          console.error('Failed to mark all read:', err);
+          showToast('标记失败', 'error');
+        }
+      },
+    });
+  }, [unreadCountInScope]);
 
   // 批量标记已读/未读（按文章 ID 列表）
   const handleBatchMarkRead = useCallback(async (ids: number[], read: boolean) => {
@@ -671,20 +727,20 @@ function App() {
       await markItemsRead(ids, read);
     } catch (err) {
       console.error('Failed to batch mark read:', err);
-      showToast('批量标记失败');
+      showToast('批量标记失败', 'error');
       return;
     }
-    await Promise.all([fetchSourcesRef.current(), fetchItemsRef.current(), fetchItemCountRef.current()]);
+    await Promise.all([fetchersRef.current.fetchSources(), fetchersRef.current.fetchItems(), fetchersRef.current.fetchItemCount()]);
   }, []);
 
   // 将订阅源移出当前文件夹
   const handleRemoveFromFolder = useCallback(async (sourceId: number) => {
     try {
       await updateSource(sourceId, { folderId: null });
-      await fetchSourcesRef.current();
+      await fetchersRef.current.fetchSources();
     } catch (err) {
       console.error('Failed to remove source from folder:', err);
-      showToast('移出文件夹失败');
+      showToast('移出文件夹失败', 'error');
     }
   }, []);
 
@@ -707,11 +763,11 @@ function App() {
       });
     } catch (err) {
       console.error('Failed to edit source:', err);
-      showToast('编辑订阅源失败');
+      showToast('编辑订阅源失败', 'error');
       return;
     }
     setEditSource(null);
-    await Promise.all([fetchSourcesRef.current(), fetchItemsRef.current(), fetchItemCountRef.current()]);
+    await Promise.all([fetchersRef.current.fetchSources(), fetchersRef.current.fetchItems(), fetchersRef.current.fetchItemCount()]);
   }, []);
 
   // 清空文件夹内的所有订阅源（保留文件夹本身）
@@ -723,10 +779,10 @@ function App() {
         setConfirmAction(null);
         try {
           await clearFolderSources(folderId);
-          await fetchSourcesRef.current();
+          await fetchersRef.current.fetchSources();
         } catch (err) {
           console.error('Failed to clear folder:', err);
-          showToast('清空分组失败');
+          showToast('清空分组失败', 'error');
         }
       },
     });
@@ -749,13 +805,13 @@ function App() {
       const message = err instanceof Error ? err.message : '导入失败';
       // 如果错误消息是 internal_server_error，给出更友好的提示
       if (message === 'internal_server_error') {
-        throw new Error('服务器处理失败，请检查后端是否正常运行');
+        throw new Error('服务处理失败，请重启应用后重试');
       }
       throw err;
     }
-    await Promise.all([fetchFoldersRef.current(), fetchSourcesRef.current()]);
+    await Promise.all([fetchersRef.current.fetchFolders(), fetchersRef.current.fetchSources()]);
     if (imported > 0) {
-      showToast('已导入 ' + imported + ' 个订阅源，正在抓取最新文章…');
+      showToast(`已导入 ${imported} 个订阅源，正在抓取最新文章`, 'success');
       // 记录导入上下文，首轮抓取完成后输出死链汇总提示
       importReportRef.current = { knownIds, importedCount: imported };
       await handleFetch({});
@@ -776,14 +832,14 @@ function App() {
         const failed = fresh.filter(
           (s) => !report.knownIds.has(s.id) && (s.lastError !== null || s.fetchFailCount > 0),
         ).length;
-        showToast(
-          failed > 0
-            ? `已添加 ${report.importedCount} 个源，${failed} 个暂时无法连接`
-            : `已添加 ${report.importedCount} 个源`,
-        );
+        if (failed > 0) {
+          showToast(`已导入 ${report.importedCount} 个订阅源，其中 ${failed} 个暂时无法连接`, 'error');
+        } else {
+          showToast(`已导入 ${report.importedCount} 个订阅源`, 'success');
+        }
       } catch (err) {
         console.error('Failed to build import report:', err);
-        showToast(`已添加 ${report.importedCount} 个源`);
+        showToast(`已导入 ${report.importedCount} 个订阅源`, 'success');
       }
     })();
   }, [refreshing]);
@@ -794,7 +850,7 @@ function App() {
       await downloadBlob('/opml/export', 'subscriptions.opml');
     } catch (err) {
       console.error('Failed to export OPML:', err);
-      showToast('导出失败');
+      showToast('导出失败', 'error');
     }
   }, []);
 
@@ -813,7 +869,7 @@ function App() {
             >
               <MenuIcon size={20} />
             </button>
-            <span className="text-[15px] font-semibold text-primary">RSS 阅读器</span>
+            <span className="text-[15px] font-semibold text-primary">Flore</span>
             <span className="w-9" />
           </div>
         )}
@@ -923,6 +979,7 @@ function App() {
             settings={settings}
             searchKeyword={searchKeyword}
             isSearchMode={isSearchMode}
+            searchStatus={searchStatus}
             multiSelectMode={multiSelectMode}
             selectedIds={selectedIds}
             onSelectItem={handleSelectItem}
@@ -1059,8 +1116,8 @@ function App() {
         </ModalLayout>
       )}
       </div>
-      {availableUpdate && (
-        <UpdateBadge update={availableUpdate} onDismiss={() => setAvailableUpdate(null)} />
+      {updateStore.snapshot.status === 'available' && (
+        <UpdateBadge update={updateStore.snapshot.info!} onDismiss={() => {}} />
       )}
       <ToastContainer />
     </div>

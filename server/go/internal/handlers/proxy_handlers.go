@@ -3,11 +3,9 @@ package handlers
 import (
 	"bytes"
 	"fmt"
-	"html"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -17,42 +15,11 @@ import (
 	"github.com/rss/go-server/internal/services"
 )
 
-var (
-	linkRePre    = regexp.MustCompile(`(?is)<link\s[^>]*rel\s*=\s*["']?stylesheet["']?[^>]*>`)
-	hrefRePre    = regexp.MustCompile(`href\s*=\s*["']([^"']+)["']`)
-	cspMetaRePre = regexp.MustCompile(`(?is)<meta\s[^>]*http-equiv\s*=\s*["']?Content-Security-Policy["']?[^>]*>`)
-	urlRePre     = regexp.MustCompile(`url\(\s*["']?([^"'\s\)]+)["']?\s*\)`)
-)
-
-// rateLimiter 简单的基于 IP 的速率限制中间件
+// frameCheckCacheMax frame 预检缓存最大条目数，超出后按 FIFO 淘汰最旧条目
 const frameCheckCacheMax = 1000
 
-// frameCacheLoad 读取 frame 预检缓存。
-func (h *ReaderHandler) frameCacheLoad(url string) (frameCheckResult, bool) {
-	h.frameCheckCacheMu.Lock()
-	defer h.frameCheckCacheMu.Unlock()
-	r, ok := h.frameCheckCache[url]
-	return r, ok
-}
-
-// frameCacheStore 写入 frame 预检缓存；超过上限时淘汰最旧条目。
-func (h *ReaderHandler) frameCacheStore(url string, r frameCheckResult) {
-	h.frameCheckCacheMu.Lock()
-	defer h.frameCheckCacheMu.Unlock()
-	if _, exists := h.frameCheckCache[url]; exists {
-		h.frameCheckCache[url] = r
-		return
-	}
-	if len(h.frameCheckCache) >= frameCheckCacheMax {
-		oldest := h.frameCheckOrder[0]
-		h.frameCheckOrder = h.frameCheckOrder[1:]
-		delete(h.frameCheckCache, oldest)
-	}
-	h.frameCheckCache[url] = r
-	h.frameCheckOrder = append(h.frameCheckOrder, url)
-}
-
-// resolveBackendBaseURL 从环境变量构建可信的后端基础地址
+// ProxyOriginal 原文最小代理：抓取原文并以可嵌入 iframe 的形式返回。
+// HTML 内容处理（剥离 CSP meta、注入 base 标签）由 services.InjectProxyHead 完成。
 func (h *ReaderHandler) ProxyOriginal(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -69,13 +36,13 @@ func (h *ReaderHandler) ProxyOriginal(c *gin.Context) {
 	httpClient := h.service.BuildFetchHTTPClient()
 	resp, err := services.ProxyOriginalWithClient(originalURL, httpClient)
 	if err != nil {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(proxyErrorPage(fmt.Sprintf("加载失败：%s", err.Error()), originalURL)))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(services.ProxyErrorPage(fmt.Sprintf("加载失败：%s", err.Error()), originalURL)))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(proxyErrorPage(fmt.Sprintf("原文返回 HTTP %d", resp.StatusCode), originalURL)))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(services.ProxyErrorPage(fmt.Sprintf("原文返回 HTTP %d", resp.StatusCode), originalURL)))
 		return
 	}
 
@@ -89,47 +56,20 @@ func (h *ReaderHandler) ProxyOriginal(c *gin.Context) {
 	// 最小代理：我们的响应不转发上游的 X-Frame-Options / CSP frame-ancestors，
 	// 因此 iframe 可正常嵌入。安全隔离由前端 iframe 的 sandbox 控制。
 
-	// 读取并注入 base target，限制响应体大小防止 OOM
+	// 读取响应体，限制大小防止 OOM
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
 	if err != nil {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(proxyErrorPage(fmt.Sprintf("读取原文失败：%s", err.Error()), originalURL)))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(services.ProxyErrorPage(fmt.Sprintf("读取原文失败：%s", err.Error()), originalURL)))
 		return
 	}
 
-	// 如果 HTML，注入 base 标签、viewport 与 iframe 适配样式
+	// 如果 HTML，剥离 CSP meta 并注入 base 标签、viewport 与 iframe 适配样式
 	if strings.Contains(contentType, "text/html") {
-		htmlContent := string(body)
-		// 剥离 CSP meta 标签：原文页面可能包含 frame-ancestors 限制，
-		// 导致 iframe 渲染时被浏览器阻止。作为代理，安全由我们自己的 CSP 控制。
-		htmlContent = stripCSPMetaTags(htmlContent)
-
-		// 网页模式（最小代理）内容处理策略：仅剥离 CSP meta 标签 + 注入 base，
-		// 不内联 CSS、不重写任何 URL（含 <style> 与 <img>）。
-		// CSS/JS/图片全部由原站直连加载，保证样式与交互完整，且不会破坏页面结构。
-		// 这与 Folo / Fluent Reader 用真实浏览器内核直连原站的做法一致。
-
-		baseTag := fmt.Sprintf(`<base href="%s" target="_blank">`, html.EscapeString(originalURL))
-		viewportMeta := `<meta name="viewport" content="width=device-width, initial-scale=1.0">`
-		iframeCSS := `<style>html,body{margin:0;padding:0;max-width:100%;box-sizing:border-box;}body{padding:16px;}</style>`
-
-		injectHead := baseTag + viewportMeta + iframeCSS
-		if headIdx := strings.Index(strings.ToLower(htmlContent), "<head>"); headIdx >= 0 {
-			htmlContent = htmlContent[:headIdx+6] + injectHead + htmlContent[headIdx+6:]
-		} else if htmlIdx := strings.Index(strings.ToLower(htmlContent), "<html"); htmlIdx >= 0 {
-			closeIdx := strings.Index(htmlContent[htmlIdx:], ">") + htmlIdx + 1
-			htmlContent = htmlContent[:closeIdx] + "<head>" + injectHead + "</head>" + htmlContent[closeIdx:]
-		}
-		c.Data(resp.StatusCode, contentType, []byte(htmlContent))
+		c.Data(resp.StatusCode, contentType, []byte(services.InjectProxyHead(string(body), originalURL)))
 		return
 	}
 
 	c.Data(resp.StatusCode, contentType, body)
-}
-
-// frameCheckResult 缓存原文嵌入预检结果
-type frameCheckResult struct {
-	frameable bool
-	finalURL  string
 }
 
 // CheckFrameable 预检原文是否可被 iframe 直接嵌入。
@@ -149,46 +89,8 @@ func (h *ReaderHandler) CheckFrameable(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
 		return
 	}
-	frameable, finalURL := h.checkFrameable(originalURL)
+	frameable, finalURL := h.frameChecker.Check(h.service.BuildFetchHTTPClient(), originalURL)
 	c.JSON(http.StatusOK, gin.H{"frameable": frameable, "url": finalURL})
-}
-
-// checkFrameable 发起一次轻量请求，检查原文是否被禁止 iframe 嵌入。
-// 结果按原文 URL 缓存，避免重复文章重复预检。
-func (h *ReaderHandler) checkFrameable(originalURL string) (bool, string) {
-	if r, ok := h.frameCacheLoad(originalURL); ok {
-		return r.frameable, r.finalURL
-	}
-
-	httpClient := h.service.BuildFetchHTTPClient()
-	// 仅读取响应头即可判定，不下载正文
-	req, err := http.NewRequest(http.MethodGet, originalURL, nil)
-	if err != nil {
-		return false, originalURL
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; FloreReader/1.0)")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		// 预检失败（网络不可达等）→ 保守走代理，代理可绕过 XFO
-		return false, originalURL
-	}
-	defer resp.Body.Close()
-	// 丢弃响应体，仅取头判定
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-
-	finalURL := resp.Request.URL.String()
-	frameable := true
-	if xfo := resp.Header.Get("X-Frame-Options"); xfo != "" {
-		frameable = false
-	}
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
-		if strings.Contains(strings.ToLower(csp), "frame-ancestors") {
-			frameable = false
-		}
-	}
-	h.frameCacheStore(originalURL, frameCheckResult{frameable: frameable, finalURL: finalURL})
-	return frameable, finalURL
 }
 
 // ProxyImage 代理图片资源，通过后端设置正确的 Referer 等请求头绕过 CDN 防盗链。
@@ -277,12 +179,10 @@ func (h *ReaderHandler) ProxyCSS(c *gin.Context) {
 		return
 	}
 
-	cssContent := string(body)
-
 	// 重写 CSS 中的 url() 引用为图片代理地址
 	// 使用后端配置的 baseURL 构建 image-proxy 基址，避免使用客户端可控的 c.Request.Host
 	imageProxyBase := h.baseURL + "/api/image-proxy"
-	cssContent = rewriteCSSUrls(cssContent, cssURL, referer, imageProxyBase)
+	cssContent := services.RewriteCSSUrls(string(body), cssURL, referer, imageProxyBase)
 
 	c.Header("Content-Type", "text/css; charset=utf-8")
 	c.Header("Cache-Control", "public, max-age=3600")
@@ -425,104 +325,3 @@ func (h *ReaderHandler) ProxyFaviconDirect(c *gin.Context) {
 	setProxyCORS(c)
 	c.Data(http.StatusOK, contentType, body)
 }
-
-// rewriteCSSUrls 重写 CSS 内容中的 url() 引用为图片代理地址。
-// 使用 CSS 文件本身的 URL 作为 base 解析相对路径，确保 CSS 中的背景图、字体等资源通过代理加载。
-// referer 用于设置图片代理的 Referer 头，绕过 CDN 防盗链。
-func rewriteCSSUrls(cssContent string, cssURL string, referer string, imageProxyBase string) string {
-	if imageProxyBase == "" {
-		return cssContent
-	}
-
-	urlRe := urlRePre
-	return urlRe.ReplaceAllStringFunc(cssContent, func(match string) string {
-		submatch := urlRe.FindStringSubmatch(match)
-		if len(submatch) < 2 {
-			return match
-		}
-		src := submatch[1]
-		// 跳过 data:、blob: URI 和已经在代理中的 URL
-		if src == "" || strings.HasPrefix(src, "data:") || strings.HasPrefix(src, "blob:") || strings.Contains(src, "/image-proxy") || strings.Contains(src, "/css-proxy") {
-			return match
-		}
-		// 解析为绝对 URL：使用 CSS 文件本身的 URL 作为 base
-		var absSrc string
-		if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-			absSrc = src
-		} else if strings.HasPrefix(src, "//") {
-			absSrc = "https:" + src
-		} else {
-			absSrc = resolveURLStr(src, cssURL)
-		}
-		if absSrc == "" {
-			return match
-		}
-		proxyURL := fmt.Sprintf("%s?url=%s&ref=%s", imageProxyBase, url.QueryEscape(absSrc), url.QueryEscape(referer))
-		return fmt.Sprintf(`url("%s")`, proxyURL)
-	})
-}
-
-// resolveURLStr 将可能为相对路径的 URL 解析为绝对 URL（基于 string base URL）。
-// 如果 href 已经是绝对 URL 则直接返回；否则基于 baseURLStr 解析。
-func resolveURLStr(href string, baseURLStr string) string {
-	hrefURL, err := url.Parse(href)
-	if err != nil {
-		return href
-	}
-	if hrefURL.IsAbs() {
-		return href
-	}
-	baseParsed, err := url.Parse(baseURLStr)
-	if err != nil {
-		return href
-	}
-	resolved := baseParsed.ResolveReference(hrefURL)
-	return resolved.String()
-}
-
-// stripCSPMetaTags 移除 HTML 中的 Content-Security-Policy meta 标签。
-// 原文页面可能包含 frame-ancestors 限制，阻止在 iframe 中渲染。
-// 作为代理，安全由我们自己的 CSP 控制，不需要原文的 CSP 限制。
-// 使用一个综合正则匹配所有常见的 CSP meta 标签变体：
-//   - 双引号/单引号/无引号的 http-equiv 属性值
-//   - http-equiv 在 content 之前或之后
-//   - 跨行属性
-//   - 自闭合标签
-func stripCSPMetaTags(htmlContent string) string {
-	re := cspMetaRePre
-	return re.ReplaceAllString(htmlContent, "")
-}
-
-// proxyErrorPage 返回 iframe 内可展示的错误页
-func proxyErrorPage(message, originalURL string) string {
-	safeMessage := html.EscapeString(message)
-	safeURL := html.EscapeString(originalURL)
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>原文加载失败</title>
-<style>
-:root{--bg:#faf8f5;--text:#5a4a3a;--muted:#8a7a6a;--primary:#b86a38;}
-@media (prefers-color-scheme: dark){:root{--bg:#2a2622;--text:#e8e0d8;--muted:#a09890;--primary:#d88a58;}}
-body{margin:0;padding:40px 24px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);text-align:center;}
-.icon{width:48px;height:48px;margin:0 auto 16px;color:var(--primary);}
-h1{font-size:18px;font-weight:600;margin:0 0 8px;}
-p{font-size:14px;margin:0 0 24px;color:var(--muted);}
-a{color:var(--primary);text-decoration:none;font-weight:500;}
-a:hover{text-decoration:underline;}
-.url{display:block;max-width:100%%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px;margin-top:8px;}
-</style>
-</head>
-<body>
-<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-<h1>无法在当前窗口加载原文</h1>
-<p>%s</p>
-<p><a href="%s" target="_blank" rel="noopener noreferrer">在新标签页打开原文</a></p>
-<p class="url">%s</p>
-</body>
-</html>`, safeMessage, safeURL, safeURL)
-}
-
-// GetDatabaseInfo 获取数据库文件信息

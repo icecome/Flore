@@ -45,7 +45,7 @@ export function useBackups(): UseBackupsResult {
       setBackups(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Refresh backups error:', err);
-      showToast('获取备份列表失败');
+      showToast('获取备份列表失败', 'error');
     }
   }, []);
 
@@ -55,11 +55,11 @@ export function useBackups(): UseBackupsResult {
     setBusy('create');
     try {
       const data = await createBackup();
-      showToast(`备份已创建: ${data.name}`);
+      showToast(`备份已创建: ${data.name}`, 'success');
       await refresh();
     } catch (err) {
       console.error('Create backup error:', err);
-      showToast('备份失败');
+      showToast('备份失败', 'error');
     } finally {
       setBusy('');
     }
@@ -69,11 +69,11 @@ export function useBackups(): UseBackupsResult {
     setBusy('delete');
     try {
       await deleteBackup(name);
-      showToast('备份已删除');
+      showToast('备份已删除', 'success');
       await refresh();
     } catch (err) {
       console.error('Delete backup error:', err);
-      showToast('删除失败');
+      showToast('删除失败', 'error');
     } finally {
       setBusy('');
     }
@@ -85,9 +85,9 @@ export function useBackups(): UseBackupsResult {
     const results = await Promise.allSettled(names.map((name) => deleteBackup(name)));
     const failed = results.filter((r) => r.status === 'rejected').length;
     const succeeded = names.length - failed;
-    if (failed === 0) showToast(`${succeeded} 个备份已删除`);
-    else if (succeeded === 0) showToast('删除失败');
-    else showToast(`部分删除失败（${failed}/${names.length}）`);
+    if (failed === 0) showToast(`${succeeded} 个备份已删除`, 'success');
+    else if (succeeded === 0) showToast('删除失败', 'error');
+    else showToast(`部分删除失败（${failed}/${names.length}）`, 'error');
     await refresh();
     setBusy('');
   }, [refresh]);
@@ -98,7 +98,7 @@ export function useBackups(): UseBackupsResult {
       await downloadBackup(name);
     } catch (err) {
       console.error('Download backup error:', err);
-      showToast('下载失败');
+      showToast('下载失败', 'error');
     } finally {
       setBusy('');
     }
@@ -108,11 +108,11 @@ export function useBackups(): UseBackupsResult {
     setBusy('restore');
     try {
       await restoreBackup(name, scope);
-      showToast(RESTORE_DONE_MESSAGE[scope]);
+      showToast(RESTORE_DONE_MESSAGE[scope], 'success');
       await refresh();
     } catch (err) {
       console.error('Restore backup error:', err);
-      showToast('恢复失败');
+      showToast('恢复失败', 'error');
     } finally {
       setBusy('');
     }
@@ -126,7 +126,7 @@ export function useBackups(): UseBackupsResult {
       return data;
     } catch (err) {
       console.error('Import backup error:', err);
-      showToast('导入失败：备份文件无效或损坏');
+      showToast('导入失败：备份文件无效或损坏', 'error');
       return null;
     } finally {
       setBusy('');
@@ -137,11 +137,11 @@ export function useBackups(): UseBackupsResult {
     setBusy('cleanup');
     try {
       await cleanupBackups();
-      showToast('已清理过期备份');
+      showToast('已清理过期备份', 'success');
       await refresh();
     } catch (err) {
       console.error('Cleanup backups error:', err);
-      showToast('清理失败');
+      showToast('清理失败', 'error');
     } finally {
       setBusy('');
     }
