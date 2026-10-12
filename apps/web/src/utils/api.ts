@@ -470,6 +470,97 @@ export async function testFileConnection(): Promise<void> {
   });
 }
 
+/** 远端 WebDAV 备份条目 */
+export interface FileBackup {
+  name: string;
+  size: number;
+  modTime: string;
+}
+
+/** 后端健康检查：仅探测存活，不鉴权。用于全局后端连接状态（P0-002）。 */
+export async function checkBackendHealth(timeoutMs = 5000): Promise<boolean> {
+  try {
+    const res = await fetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 数据库恢复模式：读取后端恢复服务暴露的数据目录信息（P0-006）。 */
+export function fetchRecoveryInfo(signal?: AbortSignal): Promise<{ dbPath: string; dataDir: string }> {
+  return fetchData<{ dbPath: string; dataDir: string }>('/recovery/info', { signal });
+}
+
+/** 数据库恢复模式：列出可用的备份与 .bak 快照。 */
+export function listRecoveryBackups(signal?: AbortSignal): Promise<Array<{
+  name: string; type: 'zip' | 'snapshot'; size: number; modTime: string; path: string;
+}>> {
+  return fetchData<{ backups: Array<{ name: string; type: 'zip' | 'snapshot'; size: number; modTime: string; path: string }> }>(
+    '/recovery/backups', { signal },
+  ).then((r) => r.backups ?? []);
+}
+
+/** 数据库恢复模式：从指定备份路径恢复（覆盖前自动保存 .bak 快照）。 */
+export async function restoreFromRecovery(path: string): Promise<void> {
+  await requestOrServerError('/recovery/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+    timeoutMs: 120000,
+    fallbackError: '恢复失败',
+  });
+}
+
+/** 诊断项（供用户选择打包内容） */
+export interface DiagnosticItem {
+  key: string;
+  name: string;
+  type: 'log' | 'snapshot' | 'stats';
+  checked: boolean;
+}
+
+/** 生成诊断包：items 指定打包项（snapshot/logs/stats），返回包路径 */
+export async function generateDiagnosticPackage(items?: string[]): Promise<{ path: string; size: number }> {
+  const res = await requestOrServerError('/diagnostic/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: items ?? ['snapshot', 'logs', 'stats'] }),
+    timeoutMs: 120000,
+    fallbackError: '生成诊断包失败',
+  });
+  return (await res.json()) as { path: string; size: number };
+}
+
+/** 列出远端 WebDAV 备份目录下的备份 */
+export function listFileBackups(signal?: AbortSignal): Promise<FileBackup[]> {
+  return fetchData<{ backups: FileBackup[] }>('/sync/file-backups', { signal })
+    .then((r) => r.backups ?? []);
+}
+
+/** 创建一份本地备份并推送到 WebDAV（云端备份） */
+export async function createFileBackup(): Promise<FileBackup> {
+  const res = await requestOrServerError('/sync/file-backups/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    timeoutMs: 300000,
+    fallbackError: '备份上传失败',
+  });
+  const data = (await res.json()) as { name: string };
+  return { name: data.name, size: 0, modTime: '' };
+}
+
+/** 从 WebDAV 下载指定备份为 Blob */
+export async function downloadFileBackup(name: string): Promise<Blob> {
+  const res = await requestOrServerError(`/sync/file-backups/download?name=${encodeURIComponent(name)}`, {
+    method: 'GET',
+    timeoutMs: 300000,
+    fallbackError: '下载失败',
+  });
+  return res.blob();
+}
+
 /** 手动触发一次全量同步（一轮可能分钟级，超时对齐后端 5 分钟） */
 export async function triggerSync(): Promise<SyncResult> {
   const res = await requestOrServerError('/sync/trigger', {

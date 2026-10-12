@@ -16,6 +16,9 @@ const toastStore = (() => {
   let toasts: ToastItem[] = [];
   let listeners: (() => void)[] = [];
   let nextId = 0;
+  // suppressed 为 true 时静默丢弃 toast：用于后端未就绪（connecting/offline）时
+  // 抑制每个请求失败触发的「获取…失败」toast 洪水，改由全局横幅统一提示（P0-002）。
+  let suppressed = false;
 
   function notifyListeners(): void {
     listeners.forEach((fn) => {
@@ -46,6 +49,7 @@ const toastStore = (() => {
 
   return {
     add(message: string, type: ToastType, duration: number): number {
+      if (suppressed) return -1;
       const id = ++nextId;
       const item: ToastItem = { id, message, type };
       item.timerId = setTimeout(() => removeToast(id), duration);
@@ -56,6 +60,9 @@ const toastStore = (() => {
     },
     getAll(): ToastItem[] {
       return toasts;
+    },
+    setSuppressed(value: boolean): void {
+      suppressed = value;
     },
     subscribe(fn: () => void): void {
       listeners.push(fn);
@@ -68,6 +75,11 @@ const toastStore = (() => {
 
 export function showToast(message: string, type: ToastType = 'info', duration: number = 3000): void {
   toastStore.add(message, type, duration);
+}
+
+/** 设置 toast 抑制开关：后端未就绪时置 true，抑制每个请求失败的 toast 洪水（P0-002）。 */
+export function setSuppressed(value: boolean): void {
+  toastStore.setSuppressed(value);
 }
 
 export function getToasts(): ToastItem[] {

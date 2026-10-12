@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -171,8 +172,38 @@ func resolveLogPath(filename string) []string {
 }
 
 func readDesensitizedLog(filename string) []byte {
-	return readLastLines(filename, 100)
+	return redactSensitive(readLastLines(filename, 100))
 }
+
+// redactSensitive 对日志文本做敏感信息脱敏（P3-006）。
+// 诊断包会被用户分享给支持渠道/公开渠道，必须在打包前移除：
+//   - Bearer Token（Authorization: Bearer xxx）
+//   - key=value 形式的 token/password/secret
+//   - FLORE_API_TOKEN 等环境变量值
+//
+// 保留行首时间戳与消息文本，仅替换敏感片段，确保日志仍可诊断。
+func redactSensitive(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	out := string(data)
+	// Authorization: Bearer <token>
+	out = authBearerRe.ReplaceAllString(out, "Authorization: Bearer ****")
+	// token=xxx / password=xxx / secret=xxx（含引号包裹与大小写变体）
+	out = secretKVRe.ReplaceAllString(out, "${1}=****")
+	// FLORE_API_TOKEN=<hex>
+	out = apiTokenKVRe.ReplaceAllString(out, "FLORE_API_TOKEN=****")
+	return []byte(out)
+}
+
+var (
+	// Authorization: Bearer <token>（token 取至行尾或空白）
+	authBearerRe = regexp.MustCompile(`(?i)Authorization:\s*Bearer\s+\S+`)
+	// token|password|passwd|secret = <值>（值可为引号包裹）
+	secretKVRe = regexp.MustCompile(`(?i)\b(token|password|passwd|secret)\b(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)`)
+	// FLORE_API_TOKEN=<hex>
+	apiTokenKVRe = regexp.MustCompile(`(?i)FLORE_API_TOKEN=\S+`)
+)
 
 // readLastLines 从文件尾部反向读取最近 N 行，避免全量读入（日志上限 10MB）。
 // 依 resolveLogPath 候选依序尝试，首个存在且可读的文件生效（m-06）。

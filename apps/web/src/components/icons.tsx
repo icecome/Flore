@@ -68,6 +68,8 @@ export {
   Bell,
   RotateCw,
   Cog,
+  Pause,
+  PauseCircle,
 } from 'lucide-react';
 
 import type { LucideProps } from 'lucide-react';

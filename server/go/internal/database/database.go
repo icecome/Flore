@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/glebarez/sqlite"
@@ -80,13 +81,55 @@ func Init() error {
 		return err
 	}
 
+	// 启动完整性快检（P0-006）：quick_check 跳过索引-表交叉校验，开销毫秒级，
+	// 是启动阶段的标准选择。失败不直接退出，交由调用方决定进入恢复模式。
+	if err := QuickCheck(); err != nil {
+		dbMutex.Lock()
+		DB = db
+		dbMutex.Unlock()
+		return err
+	}
+
 	dbMutex.Lock()
 	DB = db
 	dbMutex.Unlock()
 	return nil
 }
 
-// SetDBPath 在测试中设置数据库路径
+// QuickCheck 运行 PRAGMA quick_check 检测数据库页级损坏。
+// 返回 ok 时 database.go 的 QuickCheckResult() 可读到具体结果串。
+// 与 integrity_check 的区别：quick_check 不做索引-表交叉校验，启动阶段足够且极快。
+func QuickCheck() error {
+	ok, detail, err := QuickCheckDetailed()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("database integrity check failed: %s", detail)
+	}
+	return nil
+}
+
+// QuickCheckDetailed 返回 (是否通过, quick_check 结果串, 错误)。
+// 结果串为 "ok" 表示通过；否则为损坏详情（供恢复界面/日志展示）。
+func QuickCheckDetailed() (bool, string, error) {
+	db := GetDB()
+	if db == nil {
+		return false, "", fmt.Errorf("database not initialized")
+	}
+	var results []string
+	if err := db.Raw("PRAGMA quick_check").Scan(&results).Error; err != nil {
+		return false, "", fmt.Errorf("quick_check query failed: %w", err)
+	}
+	if len(results) == 0 {
+		return false, "", fmt.Errorf("quick_check returned no rows")
+	}
+	// quick_check 正常返回单行 "ok"；损坏时每行一条错误描述
+	if len(results) == 1 && results[0] == "ok" {
+		return true, "ok", nil
+	}
+	return false, strings.Join(results, "; "), nil
+}
 func SetDBPath(path string) {
 	resolvedDBPath = path
 }

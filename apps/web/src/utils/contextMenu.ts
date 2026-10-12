@@ -75,6 +75,7 @@ export interface SidebarSourceMenuHandlers {
   onRemoveFromFolder: (sourceId: number) => void;
   onDeleteSource: (id: number) => void;
   onFetchSource: (scope: { sourceId?: number; folderId?: number }) => void;
+  onToggleActive: (sourceId: number, active: boolean) => void;
 }
 
 export function buildSidebarSourceMenu(source: Source, h: SidebarSourceMenuHandlers): ContextMenuItem[] {
@@ -88,6 +89,7 @@ export function buildSidebarSourceMenu(source: Source, h: SidebarSourceMenuHandl
   if (source.folderId !== null) {
     base.push({ id: 'remove-from-folder', label: '移出文件夹', onClick: () => h.onRemoveFromFolder(source.id) });
   }
+  base.push({ id: 'toggle-active', label: source.active ? '暂停抓取' : '恢复抓取', onClick: () => h.onToggleActive(source.id, !source.active) });
   return [
     ...base,
     { id: 'sep-2', label: '', separator: true },

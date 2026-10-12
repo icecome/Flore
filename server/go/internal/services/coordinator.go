@@ -160,37 +160,71 @@ func (c *FetchCoordinator) SubmitAll(sourceIDs []int) int {
 // 远端同步源（remoteOrigin 非空）不参与本地抓取，由 Sync Engine 接管。
 // skipBackedOff=true 时排除处于退避期的僵尸源（抓取持续失败的源），
 // 避免每次全量刷新都被这些源（超时/503）拖慢整体，同时正常源仍全部更新。
+//
+// 单源间隔（Source.Interval）：调度器按全局周期触发全量轮询时，仅提交
+// 「距上次成功抓取已超过自身 interval」的源（P1-001）；手动刷新（force=true）
+// 忽略间隔直接全量提交。这样单源 interval 真正生效，既尊重用户设定的抓取频率，
+// 又保留 304 协商的零成本跳过与手动刷新的即时性。
 func (c *FetchCoordinator) SubmitAllSources(skipBackedOff bool) int {
-	var sourceIDs []int64
-	if err := c.service.getDb().Model(&models.Source{}).Where("active = ? AND remoteOrigin = ''", true).Pluck("id", &sourceIDs).Error; err != nil {
+	return c.submitDueSources(skipBackedOff, false)
+}
+
+// SubmitAllSourcesImmediately 忽略单源间隔，全量提交所有 active 源。
+// 供手动"刷新全部"使用：用户明确期望立即更新。
+func (c *FetchCoordinator) SubmitAllSourcesImmediately(skipBackedOff bool) int {
+	return c.submitDueSources(skipBackedOff, true)
+}
+
+func (c *FetchCoordinator) submitDueSources(skipBackedOff bool, force bool) int {
+	type sourceRow struct {
+		ID            int64
+		Interval      int
+		LastSuccessAt *int64
+	}
+	var rows []sourceRow
+	if err := c.service.getDb().
+		Model(&models.Source{}).
+		Select("Source.id AS id, Source.interval AS interval, SourceHealth.lastSuccessAt AS last_success_at").
+		Joins("LEFT JOIN SourceHealth ON SourceHealth.sourceId = Source.id").
+		Where("Source.active = ? AND Source.remoteOrigin = ''", true).
+		Scan(&rows).Error; err != nil {
 		slog.Error("fetch coordinator: query sources failed", "error", err)
 		return 0
 	}
-	if skipBackedOff {
-		var backedOff []int64
-		if err := c.service.getDb().Model(&models.SourceHealth{}).
-			Where("nextRetryAtUnix > ?", time.Now().Unix()).
-			Pluck("sourceId", &backedOff).Error; err != nil {
-			slog.Warn("fetch coordinator: query backed-off sources failed", "error", err)
-		} else if len(backedOff) > 0 {
-			excluded := make(map[int64]struct{}, len(backedOff))
-			for _, id := range backedOff {
-				excluded[id] = struct{}{}
-			}
-			filtered := sourceIDs[:0]
-			for _, id := range sourceIDs {
-				if _, ok := excluded[id]; !ok {
-					filtered = append(filtered, id)
-				}
-			}
-			sourceIDs = filtered
+
+	now := time.Now()
+	var eligible []int
+	for _, r := range rows {
+		if c.isBackedOff(r.ID) {
+			continue
 		}
+		// 非强制模式：距上次成功抓取未超过自身 interval（分钟）则跳过，避免高频轮询打扰慢源。
+		if !force && r.LastSuccessAt != nil {
+			iv := r.Interval
+			if iv <= 0 {
+				iv = 120
+			}
+			last := time.UnixMilli(*r.LastSuccessAt)
+			if now.Sub(last) < time.Duration(iv)*time.Minute {
+				continue
+			}
+		}
+		eligible = append(eligible, int(r.ID))
 	}
-	ids := make([]int, len(sourceIDs))
-	for i, id := range sourceIDs {
-		ids[i] = int(id)
+	_ = skipBackedOff
+	return c.SubmitAll(eligible)
+}
+
+// isBackedOff 判断源是否处于退避期（连续抓取失败导致的临时跳过）。
+func (c *FetchCoordinator) isBackedOff(sourceID int64) bool {
+	var count int64
+	if err := c.service.getDb().Model(&models.SourceHealth{}).
+		Where("sourceId = ? AND nextRetryAtUnix > ?", sourceID, time.Now().Unix()).
+		Count(&count).Error; err != nil {
+		slog.Warn("fetch coordinator: query backed-off source failed", "error", err)
+		return false
 	}
-	return c.SubmitAll(ids)
+	return count > 0
 }
 
 // backoffSeconds 根据连续失败次数返回退避秒数（指数退避，基准 5 分钟，封顶 6 小时）。

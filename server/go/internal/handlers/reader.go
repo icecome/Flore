@@ -169,70 +169,81 @@ func AuthMiddleware(token string) gin.HandlerFunc {
 	}
 }
 
-// RegisterRoutes 注册路由，apiToken 非空时对敏感路由启用认证
+// RegisterRoutes 注册路由，apiToken 非空时对敏感路由启用认证。
+//
+// 鉴权原则（按原则添加新路由，而非按先例）：
+//   - 凡返回用户数据（订阅源、文章、计数、搜索、缓存统计、DB 信息、备份列表、
+//     设置、同步配置、诊断项清单）或变更用户数据的接口，一律归入 sensitive 组，
+//     apiToken 非空时必须携带 Bearer Token。
+//   - 仅「无法携带 Authorization 头、需经 <img>/<link> 消费」的只读代理族
+//     （image/css/favicon 代理）与仅做存活探活、不暴露数据的 /health 保持开放。
+//   - 数据写入（create/delete/export/cleanup/vacuum/restore）本就已在 sensitive 组；
+//     此处把读接口一并收紧，闭合「同机进程免 token 读取全量历史」的缺口（P1-013/P1-014）。
+//     桌面壳自身请求经 ApiRequest / doRequest 已统一携带 token，不受影响。
 func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 	// 速率限制：每 IP 每 60 秒最多 120 次请求
 	h.rateLimiter = newRateLimiter(120, 60*time.Second)
 	api := r.Group("/api", rateLimitMiddleware(h.rateLimiter))
 
-	// 敏感路由组（数据库导入/导出、OPML 导入、破坏性写操作），需要 Bearer Token 认证
+	// 敏感路由组（返回或变更用户数据的接口），需要 Bearer Token 认证。
+	// 仅当 apiToken 非空时启用 AuthMiddleware；空 token 时退回开放（Web 本地无 token 部署）。
 	auth := AuthMiddleware(apiToken)
 	sensitive := api
 	if auth != nil {
 		sensitive = api.Group("", auth)
 	}
 	{
-		// 订阅源
-		api.GET("/sources", h.GetSources)
-		api.GET("/sources/:id", h.GetSource)
+		// 订阅源（读返回订阅列表，写/抓取为变更操作，全部入敏感组）
+		sensitive.GET("/sources", h.GetSources)
+		sensitive.GET("/sources/:id", h.GetSource)
 		sensitive.PUT("/sources/:id", h.UpdateSource)
 		sensitive.DELETE("/sources/:id", h.DeleteSource)
 		sensitive.DELETE("/sources/delete-batch", h.DeleteSourcesBatch)
-		api.POST("/sources/:id/fetch", h.FetchSource)
-		api.POST("/sources/fetch-all", h.FetchAll)
-		api.GET("/sources/fetch-status", h.FetchStatus)
-		api.POST("/sources/:id/read-all", h.MarkSourceAllRead)
-		api.POST("/sources/create", h.CreateSource)
+		sensitive.POST("/sources/:id/fetch", h.FetchSource)
+		sensitive.POST("/sources/fetch-all", h.FetchAll)
+		sensitive.GET("/sources/fetch-status", h.FetchStatus)
+		sensitive.POST("/sources/:id/read-all", h.MarkSourceAllRead)
+		sensitive.POST("/sources/create", h.CreateSource)
 
-		// 文件夹/分类
-		api.GET("/folders", h.GetFolders)
-		api.POST("/folders", h.CreateFolder)
+		// 文件夹/分类（返回/变更订阅结构，全部入敏感组）
+		sensitive.GET("/folders", h.GetFolders)
+		sensitive.POST("/folders", h.CreateFolder)
 		sensitive.PUT("/folders/:id", h.UpdateFolder)
 		sensitive.DELETE("/folders/:id", h.DeleteFolder)
-		api.POST("/folders/:id/clear", h.ClearFolderSources)
-		api.POST("/folders/:id/fetch", h.FetchFolder)
+		sensitive.POST("/folders/:id/clear", h.ClearFolderSources)
+		sensitive.POST("/folders/:id/fetch", h.FetchFolder)
 
-		// OPML 导入（敏感：可批量写入数据）
+		// OPML（导入为批量写入、导出为全量订阅，均入敏感组）
 		sensitive.POST("/opml/import", h.ImportOPML)
-		api.GET("/opml/export", h.ExportOPML)
+		sensitive.GET("/opml/export", h.ExportOPML)
 
-		// 文章
-		api.GET("/items", h.GetItems)
-		api.GET("/items/count", h.GetItemsCount)
-		api.GET("/items/:id", h.GetItem)
-		api.POST("/items/:id/read", h.MarkRead)
-		api.POST("/items/:id/unread", h.MarkUnread)
-		api.POST("/items/:id/star", h.MarkStar)
-		api.POST("/items/:id/unstar", h.MarkUnstar)
-		api.POST("/items/:id/read-later", h.MarkReadLater)
-		api.POST("/items/:id/unread-later", h.MarkUnreadLater)
-		api.POST("/items/read-later/clear", h.ClearReadLater)
-		api.POST("/items/read-all", h.MarkItemsRead)
-		api.POST("/items/mark-read", h.MarkReadBatchItems)
-		api.GET("/items/search", h.SearchItems)
-		api.POST("/items/:id/index-search", h.IndexItemForSearch)
-		api.POST("/items/index-search/rebuild", h.RebuildSearchIndex)
-		api.GET("/items/:id/readability", h.GetReadability)
-		api.POST("/items/export", h.ExportItems)
-		api.GET("/items/:id/export.md", h.ExportItemMarkdown)
-		api.POST("/items/:id/apply-filters", h.ApplyFilterRules)
+		// 文章（读返回阅读历史、写为状态变更，全部入敏感组）
+		sensitive.GET("/items", h.GetItems)
+		sensitive.GET("/items/count", h.GetItemsCount)
+		sensitive.GET("/items/:id", h.GetItem)
+		sensitive.POST("/items/:id/read", h.MarkRead)
+		sensitive.POST("/items/:id/unread", h.MarkUnread)
+		sensitive.POST("/items/:id/star", h.MarkStar)
+		sensitive.POST("/items/:id/unstar", h.MarkUnstar)
+		sensitive.POST("/items/:id/read-later", h.MarkReadLater)
+		sensitive.POST("/items/:id/unread-later", h.MarkUnreadLater)
+		sensitive.POST("/items/read-later/clear", h.ClearReadLater)
+		sensitive.POST("/items/read-all", h.MarkItemsRead)
+		sensitive.POST("/items/mark-read", h.MarkReadBatchItems)
+		sensitive.GET("/items/search", h.SearchItems)
+		sensitive.POST("/items/:id/index-search", h.IndexItemForSearch)
+		sensitive.POST("/items/index-search/rebuild", h.RebuildSearchIndex)
+		sensitive.GET("/items/:id/readability", h.GetReadability)
+		sensitive.POST("/items/export", h.ExportItems)
+		sensitive.GET("/items/:id/export.md", h.ExportItemMarkdown)
+		sensitive.POST("/items/:id/apply-filters", h.ApplyFilterRules)
 
-		// 过滤规则
-		api.GET("/filter-rules", h.ListFilterRules)
-		api.POST("/filter-rules", h.CreateFilterRule)
+		// 过滤规则（返回/变更规则，全部入敏感组）
+		sensitive.GET("/filter-rules", h.ListFilterRules)
+		sensitive.POST("/filter-rules", h.CreateFilterRule)
 		sensitive.PUT("/filter-rules/:id", h.UpdateFilterRule)
 		sensitive.DELETE("/filter-rules/:id", h.DeleteFilterRule)
-		api.POST("/filter-rules/:id/test", h.TestFilterRule)
+		sensitive.POST("/filter-rules/:id/test", h.TestFilterRule)
 
 		// 服务端同步（config 含脱敏密钥，读写均入敏感组从严）
 		sensitive.GET("/sync/config", h.GetSyncConfig)
@@ -242,11 +253,16 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		sensitive.POST("/sync/trigger", h.TriggerSync)
 		sensitive.GET("/sync/status", h.GetSyncStatus)
 		sensitive.POST("/sync/align", h.AlignSubscriptions)
+		// WebDAV 备份（文件后端）：列出/上传/下载整包备份到用户自有 WebDAV 存储
+		sensitive.GET("/sync/file-backups", h.ListFileBackups)
+		sensitive.POST("/sync/file-backups/upload", h.UploadBackupToWebDAV)
+		sensitive.POST("/sync/file-backups/create", h.CreateBackupToWebDAV)
+		sensitive.GET("/sync/file-backups/download", h.DownloadBackupFromWebDAV)
 
 		// 原文代理
 		// 预检原文是否可被 iframe 直接嵌入（检查 X-Frame-Options / CSP frame-ancestors），供前端决定直连还是走代理
-		api.GET("/proxy/check/:id", h.CheckFrameable)
-		api.GET("/proxy/:id", h.ProxyOriginal)
+		sensitive.GET("/proxy/check/:id", h.CheckFrameable)
+		sensitive.GET("/proxy/:id", h.ProxyOriginal)
 		// 图片/CSS/图标代理为只读透传，已被全局速率限制 + 类型白名单 + 尺寸上限保护，
 		// 且需经 <img>/<link> 消费（无法携带 Authorization 头），故置于非敏感组。
 		api.GET("/image-proxy", h.ProxyImage)
@@ -254,19 +270,19 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		api.GET("/favicon-proxy", h.ProxyFavicon)
 		api.GET("/favicon-direct", h.ProxyFaviconDirect)
 
-		// 统计
-		api.GET("/stats/unread", h.GetUnreadCount)
+		// 统计（返回未读数，属用户数据，入敏感组）
+		sensitive.GET("/stats/unread", h.GetUnreadCount)
 
 		// 数据库备份/恢复（敏感：可替换整个数据库）
 		sensitive.GET("/database/export", h.ExportDatabase)
 		sensitive.POST("/database/restore", h.ImportDatabase)
 
-		// 数据管理
-		api.GET("/database/info", h.GetDatabaseInfo)
-		api.GET("/cache/stats", h.GetCacheStats)
-		api.POST("/cache/clear-readability", h.ClearReadabilityCache)
-		api.POST("/cache/rebuild-search", h.RebuildSearchIndex)
-		api.POST("/database/vacuum", h.VacuumDatabase)
+		// 数据管理（info 暴露 DB 绝对路径、cache/stats 暴露内部结构，均入敏感组）
+		sensitive.GET("/database/info", h.GetDatabaseInfo)
+		sensitive.GET("/cache/stats", h.GetCacheStats)
+		sensitive.POST("/cache/clear-readability", h.ClearReadabilityCache)
+		sensitive.POST("/cache/rebuild-search", h.RebuildSearchIndex)
+		sensitive.POST("/database/vacuum", h.VacuumDatabase)
 
 		// 备份管理（全部纳入敏感组：备份含全量数据库，下载/恢复/导入/清理均可被
 		// 同机进程滥用，与上方 database/export、database/restore 的防护口径一致）
@@ -281,28 +297,25 @@ func (h *ReaderHandler) RegisterRoutes(r *gin.Engine, apiToken string) {
 		sensitive.POST("/backups/:name/restore-opml", h.RestoreOPMLFromBackup)
 		sensitive.POST("/backups/restore/import", h.ImportBackupAndValidate)
 
-		// 设置（Settings 表，键值对存储）
-		// GET /settings 返回全量键值，含 sync_api_password、proxyUrl 等敏感明文，
-		// 与单 key 读取同样纳入 sensitive 组，避免被未认证同机进程探测
+		// 设置（Settings 表，键值对存储；返回全量键值含 sync_api_password、proxyUrl
+		// 等敏感明文，单 key 读取同样可探查，全部纳入 sensitive 组）
 		sensitive.GET("/settings", h.GetSettings)
 		sensitive.PUT("/settings", h.UpdateSettings)
-		// GetSetting 单 key 读取纳入 sensitive 组：
-		// settings 可能含 proxyUrl 等敏感字段，未认证访问可被探测
 		sensitive.GET("/settings/:key", h.GetSetting)
 
-		// 文章留存清理
-		api.POST("/articles/cleanup", h.CleanupArticles)
+		// 文章留存清理（批量删除已读文章，入敏感组）
+		sensitive.POST("/articles/cleanup", h.CleanupArticles)
 
-		// 诊断包
-		api.GET("/diagnostic/items", h.GetDiagnoseItems)
+		// 诊断包（items 清单返回内部数据；generate/download 为敏感写/读，全部入敏感组）
+		sensitive.GET("/diagnostic/items", h.GetDiagnoseItems)
 		sensitive.POST("/diagnostic/generate", h.GenerateDiagnosticPackage)
 		sensitive.GET("/diagnostic/:path/download", h.ExtractDiagnosticPackage)
 
-		// 版本信息
+		// 版本信息（不含用户数据，保持开放）
 		api.GET("/version", h.GetVersion)
 	}
 
-	// 健康检查
+	// 健康检查（仅存活探活，不暴露用户数据，保持开放）
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

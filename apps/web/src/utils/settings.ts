@@ -233,7 +233,6 @@ export interface AppSettings {
 }
 
 const STORAGE_KEY = 'flore-settings';
-const MIGRATION_KEY = 'flore-settings-migrated';
 
 export const DEFAULT_SETTINGS: AppSettings = {
   // 通用：时间线行为
@@ -501,28 +500,6 @@ export async function saveSettingsToServer(settings: AppSettings): Promise<void>
     getDesktopApp()?.RefreshWindowSettings?.();
   } catch (err) {
     console.error('Failed to refresh desktop window settings:', err);
-  }
-}
-
-// 一次性迁移：将 localStorage 中的配置上传到后端
-// 仅在未标记 MIGRATION_KEY 时执行，避免重复迁移
-export async function migrateLegacySettingsIfNeeded(): Promise<void> {
-  if (localStorage.getItem(MIGRATION_KEY)) return;
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    localStorage.setItem(MIGRATION_KEY, '1');
-    return;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const migrated = migrateLegacySettings(parsed);
-    const { markOnScroll, markOnHover, markOnView, hidePrivate, ...rest } = parsed as Record<string, unknown>;
-    void markOnScroll; void markOnHover; void markOnView; void hidePrivate;
-    const settings = { ...DEFAULT_SETTINGS, ...rest, ...migrated } as AppSettings;
-    await saveSettingsToServer(settings);
-    localStorage.setItem(MIGRATION_KEY, '1');
-  } catch {
-    // 迁移失败下次重试
   }
 }
 

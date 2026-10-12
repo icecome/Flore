@@ -75,7 +75,33 @@ func validateSQLite(path string) error {
 	if err != nil {
 		return fmt.Errorf("invalid flore database: Item table not found")
 	}
-	return nil
+
+	// 快检备份源本身是否页级损坏（P0-006）：避免把一个已损坏的备份恢复到实时库，
+	// 造成「恢复即二次损坏」。quick_check 毫秒级，启动/恢复路径均可接受。
+	var checkRows []string
+	if err := db.QueryRow("PRAGMA quick_check").Scan(new(string)).Error; err != nil {
+		// quick_check 可能返回多行损坏描述，单行 Scan 会报错；改用多行扫描。
+		rows, qerr := db.Query("PRAGMA quick_check")
+		if qerr != nil {
+			return fmt.Errorf("quick_check query failed: %w", qerr)
+		}
+		for rows.Next() {
+			var r string
+			if serr := rows.Scan(&r); serr == nil {
+				checkRows = append(checkRows, r)
+			}
+		}
+		rows.Close()
+	} else {
+		checkRows = []string{"ok"}
+	}
+	if len(checkRows) == 1 && checkRows[0] == "ok" {
+		return nil
+	}
+	if len(checkRows) == 0 {
+		return fmt.Errorf("quick_check returned no rows")
+	}
+	return fmt.Errorf("backup source is corrupt: %s", strings.Join(checkRows, "; "))
 }
 
 // ImportDatabase 用上传的数据库文件替换当前数据库
@@ -458,6 +484,15 @@ func (s *ReaderService) DeleteBackup(name string) error {
 
 	fullPath := filepath.Join(backupDir, name)
 	return os.Remove(fullPath)
+}
+
+// ReadBackupFile 读取本地备份 ZIP 的完整字节（供云端上传等场景）。
+// 名称经与 DeleteBackup 相同的路径安全校验，防止路径穿越。
+func (s *ReaderService) ReadBackupFile(name string) ([]byte, error) {
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") || strings.Contains(name, "..") || !strings.HasSuffix(name, ".zip") {
+		return nil, fmt.Errorf("invalid backup name")
+	}
+	return os.ReadFile(filepath.Join(getBackupDir(database.DBPath()), name))
 }
 
 // GetBackupContentsFromPath 从指定 ZIP 文件路径读取内容清单（用于导入外部备份）

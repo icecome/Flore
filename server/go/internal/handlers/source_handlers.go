@@ -225,9 +225,10 @@ func (h *ReaderHandler) FetchAll(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "coordinator not ready"})
 		return
 	}
-	// 默认跳过退避期僵尸源以加速刷新；?force=true 时强制抓取全部（含重试僵尸源）
+	// 默认跳过退避期僵尸源以加速刷新；?force=true 时强制抓取全部（含重试僵尸源）。
+	// 手动刷新忽略单源 interval（用户明确期望立即更新），由 SubmitAllSourcesImmediately 处理。
 	force := c.Query("force") == "true"
-	h.service.Coordinator().SubmitAllSources(!force)
+	h.service.Coordinator().SubmitAllSourcesImmediately(!force)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

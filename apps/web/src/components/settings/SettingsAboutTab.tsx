@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getVersion, isDesktop, openExternal } from '../../utils/api';
+import { getVersion, isDesktop, openExternal, generateDiagnosticPackage } from '../../utils/api';
 import useUpdate from '../../hooks/useUpdate';
 import type { AppSettings } from '../../utils/settings';
 import { Section, SmallBtn, Row, Toggle } from './SettingsShared';
@@ -75,6 +75,29 @@ export default function SettingsAboutTab({ settings, updateSetting }: Props) {
   const pct = Math.min(100, Math.max(0, Math.round(snapshot.progress * 100)));
   const { status } = snapshot;
   const busy = status === 'checking' || status === 'downloading';
+
+  // 诊断包生成（面向所有用户，P0/decision3）：打包数据库快照、脱敏日志与系统信息，
+  // 便于用户反馈问题时附带可诊断材料。
+  const [generatingDiagnostic, setGeneratingDiagnostic] = useState(false);
+  const handleGenerateDiagnostic = async () => {
+    setGeneratingDiagnostic(true);
+    try {
+      const { path } = await generateDiagnosticPackage();
+      showToast('诊断包已生成', 'success');
+      // 桌面端可直接打开所在目录；Web 端提示路径。
+      if (desktop) {
+        const dir = path.replace(/[^/\\]*$/, '');
+        openExternal(dir);
+      } else {
+        showToast(`诊断包已保存到：${path}`, 'info', 6000);
+      }
+    } catch (err) {
+      console.error('生成诊断包失败:', err);
+      showToast(translateBackendError(err instanceof Error ? err.message : String(err)) || '生成诊断包失败', 'error');
+    } finally {
+      setGeneratingDiagnostic(false);
+    }
+  };
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -194,6 +217,20 @@ export default function SettingsAboutTab({ settings, updateSetting }: Props) {
             )}
           </div>
         )}
+      </Section>
+
+      <Section title="诊断">
+        <Row
+          title="生成诊断包"
+          desc="打包数据库快照、脱敏日志与系统信息为一个压缩文件，便于反馈问题时附带。"
+          control={
+            <SmallBtn
+              label={generatingDiagnostic ? '生成中…' : '生成诊断包'}
+              disabled={generatingDiagnostic}
+              onClick={handleGenerateDiagnostic}
+            />
+          }
+        />
       </Section>
 
       <Section title="关于">

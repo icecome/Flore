@@ -14,6 +14,8 @@ interface EditSourceParams {
   folderId: number | null;
   isPrivate: boolean;
   hideInTimeline: boolean;
+  active: boolean;
+  interval: number;
 }
 
 interface Props {
@@ -31,6 +33,8 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
   );
   const [isPrivate, setIsPrivate] = useState(source.isPrivate ?? false);
   const [hideInTimeline, setHideInTimeline] = useState(source.hideInTimeline ?? false);
+  const [active, setActive] = useState(source.active ?? true);
+  const [interval, setInterval] = useState<number>(source.interval || 120);
 
   const nameRef = useRef<HTMLInputElement>(null);
   const urlRef = useRef<HTMLInputElement>(null);
@@ -41,7 +45,16 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
     const trimmed = name.trim();
     if (!trimmed) return;
     const folderId = selectedFolder === 'none' ? null : Number(selectedFolder);
-    onSubmit({ sourceId: source.id, name: trimmed, url: url.trim(), folderId, isPrivate, hideInTimeline });
+    onSubmit({
+      sourceId: source.id,
+      name: trimmed,
+      url: url.trim(),
+      folderId,
+      isPrivate,
+      hideInTimeline,
+      active,
+      interval: Math.max(5, Math.min(10080, Math.round(interval) || 120)),
+    });
   };
 
   return (
@@ -129,6 +142,28 @@ export default function EditSourceModal({ source, folders, onClose, onSubmit }: 
             <div className="text-xs text-muted">开启后，此订阅的文章不在文章列表显示。</div>
           </div>
           <Toggle checked={hideInTimeline} onChange={setHideInTimeline} />
+        </div>
+
+        <div className="flex items-center justify-between mb-5 gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="text-base font-semibold text-primary mb-0.5">启用此订阅</div>
+            <div className="text-xs text-muted">关闭后暂停抓取，文章列表与未读计数不再计入；可随时重新启用。</div>
+          </div>
+          <Toggle checked={active} onChange={setActive} />
+        </div>
+
+        <div className="mb-5">
+          <label className="block text-base font-semibold text-primary mb-1">抓取间隔（分钟）</label>
+          <div className="text-xs text-muted mb-2">覆盖全局刷新频率，仅对此订阅源生效（自动调度生效；手动刷新仍立即抓取）。</div>
+          <input
+            type="number"
+            min={5}
+            max={10080}
+            value={interval}
+            onChange={(e) => setInterval(Number(e.target.value))}
+            className="w-full px-3 py-[10px] border border-border rounded-sm text-base box-border bg-surface text-primary"
+            placeholder="120"
+          />
         </div>
 
         <div className="flex justify-end gap-3 mt-2">

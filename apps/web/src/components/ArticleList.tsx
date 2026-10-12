@@ -767,7 +767,9 @@ const ArticleRow = React.memo(function ArticleRow({
           <Clock size={11} className="shrink-0" />
           <span className="text-[11px]">{dateText || '—'}</span>
         </div>
-        <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 [&:has(.on)]:opacity-100">
+        {/* 行内操作：桌面 hover 显现；窄屏（<768px）常显，因触摸无 hover；
+            focus-within 让键盘 Tab 也能显形（桌面可达性收益）。 */}
+        <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 [&:has(.on)]:opacity-100 max-md:opacity-100">
           <button
             onClick={handleToggleReadLater}
             className={cn(

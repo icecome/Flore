@@ -20,9 +20,10 @@ import ConfirmDialog from './components/ConfirmDialog';
 import ModalLayout from './components/ModalLayout';
 import type { Item, Source, Folder } from './types';
 import type { AppSettings } from './utils/settings';
-import { loadSettings, loadSettingsFromServer, saveSettings, applyAccentColor, applyAppTheme, watchSystemTheme, migrateLegacySettingsIfNeeded } from './utils/settings';
-import { showToast } from './utils/toast';
+import { loadSettings, loadSettingsFromServer, saveSettings, applyAccentColor, applyAppTheme, watchSystemTheme } from './utils/settings';
+import { showToast, setSuppressed } from './utils/toast';
 import { translateBackendError } from './utils/backendError';
+import RecoveryScreen from './components/RecoveryScreen';
 
 import {
   downloadBlob,
@@ -43,7 +44,9 @@ import {
   clearFolderSources,
   importOPML,
   listSources,
+  checkBackendHealth,
   isDesktop,
+  getApi,
 } from './utils/api';
 import { useSourcesData } from './hooks/useSourcesData';
 import { useItemsData, type ItemFilter } from './hooks/useItemsData';
@@ -78,13 +81,12 @@ function App() {
     return watchSystemTheme(() => settings.appTheme);
   }, [settings.appTheme]);
 
-  // 启动后从后端加载设置，并执行一次性 localStorage 迁移
+  // 启动后从后端加载设置
   // 失败时静默，保留 localStorage 中的配置继续使用
   const [serverSettingsLoaded, setServerSettingsLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      await migrateLegacySettingsIfNeeded();
       const serverSettings = await loadSettingsFromServer();
       if (cancelled) return;
       if (serverSettings) {
@@ -134,6 +136,68 @@ function App() {
     setSources, setFolders, setUnreadCountInScope,
     fetchSources, fetchFolders, fetchUnreadCount,
   } = useSourcesData(selectedSourceId, selectedFolderId, settings);
+
+  // 全局后端连接状态（P0-002）：
+  //   connecting → 后端尚未探活成功，显示骨架而非 OnboardingWelcome；
+  //   ready      → 首次成功取到数据，正常渲染；
+  //   offline    → 后端不可达，显示持久横幅（重试 + 打开日志），抑制每个请求的 toast 洪水。
+  const [backendStatus, setBackendStatus] = useState<'connecting' | 'ready' | 'offline'>('connecting');
+  // 数据库损坏时后端进入恢复模式（P0-006），此时展示 RecoveryScreen 而非正常内容。
+  const [recoveryMode, setRecoveryMode] = useState(false);
+
+  const retryBackend = useCallback(async () => {
+    setBackendStatus('connecting');
+    const healthy = await checkBackendHealth();
+    if (healthy) {
+      setBackendStatus('ready');
+      await Promise.all([
+        fetchersRef.current.fetchSources(),
+        fetchersRef.current.fetchFolders(),
+        fetchersRef.current.fetchUnreadCount(undefined),
+      ]);
+    } else {
+      setBackendStatus('offline');
+    }
+  }, []);
+
+  // 首次挂载探测后端健康；失败进入 offline，横幅重试可再次触发。
+  // 健康时进一步探测是否处于数据库恢复模式（P0-006）。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const healthy = await checkBackendHealth();
+      if (cancelled) return;
+      if (!healthy) {
+        setBackendStatus('offline');
+        return;
+      }
+      try {
+        const res = await fetch(`${getApi()}/recovery/info`, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          setRecoveryMode(true);
+          setBackendStatus('ready');
+          return;
+        }
+      } catch {
+        // 非恢复模式（404/网络错误）走正常流程
+      }
+      setBackendStatus('ready');
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // 首次成功取到订阅/文章数据时，确认后端就绪（connecting → ready）。
+  useEffect(() => {
+    if (backendStatus === 'connecting' && !loadingSources && (sources.length > 0 || serverSettingsLoaded)) {
+      setBackendStatus('ready');
+    }
+  }, [backendStatus, loadingSources, sources.length, serverSettingsLoaded]);
+
+  // offline 时抑制 toast 洪水；ready 时恢复。恢复后不重放离线期间被吞掉的提示。
+  useEffect(() => {
+    setSuppressed(backendStatus !== 'ready');
+    return () => setSuppressed(false);
+  }, [backendStatus]);
 
   const [loadingReader, setLoadingReader] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -744,7 +808,19 @@ function App() {
     }
   }, []);
 
-  // 编辑订阅源（名称 + URL + 文件夹 + 私密 + 时间线隐藏）
+  // 暂停/恢复订阅源抓取（P1-001）：active=false 时后端不再抓取、不计未读。
+  const handleToggleSourceActive = useCallback(async (sourceId: number, active: boolean) => {
+    try {
+      await updateSource(sourceId, { active });
+      await Promise.all([fetchersRef.current.fetchSources(), fetchersRef.current.fetchUnreadCount(undefined)]);
+      showToast(active ? '已恢复抓取' : '已暂停抓取', 'success');
+    } catch (err) {
+      console.error('Failed to toggle source active:', err);
+      showToast('操作失败', 'error');
+    }
+  }, []);
+
+  // 编辑订阅源（名称 + URL + 文件夹 + 私密 + 时间线隐藏 + 启用状态 + 抓取间隔）
   const handleEditSource = useCallback(async (params: {
     sourceId: number;
     name: string;
@@ -752,6 +828,8 @@ function App() {
     folderId: number | null;
     isPrivate: boolean;
     hideInTimeline: boolean;
+    active: boolean;
+    interval: number;
   }) => {
     try {
       await updateSource(params.sourceId, {
@@ -760,6 +838,8 @@ function App() {
         folderId: params.folderId,
         isPrivate: params.isPrivate,
         hideInTimeline: params.hideInTimeline,
+        active: params.active,
+        interval: params.interval,
       });
     } catch (err) {
       console.error('Failed to edit source:', err);
@@ -931,6 +1011,7 @@ function App() {
           onClearFolderSources={handleClearFolder}
           onEditSource={(source) => setEditSource(source)}
           onRemoveFromFolder={handleRemoveFromFolder}
+          onToggleSourceActive={handleToggleSourceActive}
           readLaterCount={readLaterCount}
           totalCount={totalCount}
           unreadCountInScope={unreadCountInScope}
@@ -950,7 +1031,31 @@ function App() {
         />
       )}
 
-      {sources.length === 0 ? (
+      {backendStatus === 'offline' && (
+        <div className="flex items-center justify-between gap-3 border-b border-border-subtle bg-[var(--danger-soft,transparent)] px-4 py-2 text-[13px] text-danger">
+          <span>无法连接本地后端，请确认应用已正常启动。</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="secondary" onClick={retryBackend}>重试</Button>
+          </div>
+        </div>
+      )}
+
+      {recoveryMode ? (
+        <RecoveryScreen
+          onRestored={() => {
+            // 恢复成功后提示重启；刷新页面会让前端重新探测，此时后端仍是恢复模式，
+            // 因此引导用户重启应用（桌面壳）或重新加载。
+            window.location.reload();
+          }}
+        />
+      ) : backendStatus === 'connecting' ? (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-muted">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary" />
+            <span className="text-sm">正在连接本地后端……</span>
+          </div>
+        </div>
+      ) : sources.length === 0 ? (
         <OnboardingWelcome
           onImport={() => setShowImportModal(true)}
           onAddSource={() => setShowAddModal(true)}

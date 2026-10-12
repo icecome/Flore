@@ -8,6 +8,10 @@ import {
   triggerSync,
   getSyncStatus,
   alignSubscriptions,
+  listFileBackups,
+  createFileBackup,
+  downloadFileBackup,
+  type FileBackup,
 } from '../../utils/api';
 import { showToast } from '../../utils/toast';
 import { translateBackendError } from '../../utils/backendError';
@@ -98,6 +102,10 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
   const [alignUrls, setAlignUrls] = useState<string[]>([]);
   const [alignChecked, setAlignChecked] = useState<Set<string>>(new Set());
   const [aligning, setAligning] = useState(false);
+  // WebDAV 云端备份
+  const [fileBackups, setFileBackups] = useState<FileBackup[] | null>(null);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupUploading, setBackupUploading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -189,6 +197,55 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
     } finally {
       setFileTesting(false);
     }
+  };
+
+  const refreshFileBackups = async () => {
+    setBackupLoading(true);
+    try {
+      setFileBackups(await listFileBackups());
+    } catch (err) {
+      setFileBackups([]);
+      showToast(translateBackendError(err instanceof Error ? err.message : '') || '获取远端备份列表失败', 'error');
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const runFileBackup = async () => {
+    const saved = await save();
+    if (!saved) return;
+    setBackupUploading(true);
+    try {
+      await createFileBackup();
+      showToast('已备份到 WebDAV', 'success');
+      await refreshFileBackups();
+    } catch (err) {
+      console.error('Failed to backup to webdav:', err);
+      showToast(translateBackendError(err instanceof Error ? err.message : '') || '备份上传失败', 'error');
+    } finally {
+      setBackupUploading(false);
+    }
+  };
+
+  const runFileBackupDownload = async (name: string) => {
+    try {
+      const blob = await downloadFileBackup(name);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast(translateBackendError(err instanceof Error ? err.message : '') || '下载失败', 'error');
+    }
+  };
+
+  const formatSize = (bytes: number): string => {
+    if (bytes <= 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const refreshStatus = async () => {
@@ -426,6 +483,53 @@ export default function SettingsSyncTab({ onSourcesChanged }: SettingsSyncTabPro
                 />
               }
             />
+            <Row
+              title="立即备份到 WebDAV"
+              desc="创建一份本地压缩备份并上传到该地址。"
+              control={
+                <SmallBtn
+                  label={backupUploading ? '备份中……' : '备份'}
+                  disabled={backupUploading || saving}
+                  onClick={runFileBackup}
+                />
+              }
+            />
+            <Row
+              title="远端备份"
+              desc="列出该地址下的备份文件，可下载到本地。"
+              control={
+                <div className="flex gap-2">
+                  <SmallBtn
+                    label={backupLoading ? '加载中……' : '刷新列表'}
+                    disabled={backupLoading || saving}
+                    onClick={refreshFileBackups}
+                  />
+                  <SmallBtn label="下载" disabled={!fileBackups || fileBackups.length === 0} onClick={() => fileBackups && runFileBackupDownload(fileBackups[0].name)} />
+                </div>
+              }
+            />
+            {fileBackups && fileBackups.length > 0 && (
+              <div className="border-b border-border-subtle py-2">
+                <div className="text-[12px] text-muted">最近备份（下载到本地文件）：</div>
+                <div className="mt-1 flex flex-col gap-1">
+                  {fileBackups.slice(0, 10).map((b) => (
+                    <div key={b.name} className="flex items-center justify-between gap-2 text-[12.5px]">
+                      <span className="truncate text-secondary" title={b.name}>{b.name}</span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-[11px] text-muted">{formatSize(b.size)}</span>
+                        <button
+                          type="button"
+                          onClick={() => runFileBackupDownload(b.name)}
+                          className="text-[11px] text-primary hover:underline"
+                        >
+                          下载
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </Section>

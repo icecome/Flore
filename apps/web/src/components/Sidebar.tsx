@@ -29,6 +29,7 @@ import {
   FolderOpenIcon,
   Search,
   RefreshCw,
+  PauseCircle,
 } from './icons';
 
 interface Props {
@@ -57,6 +58,7 @@ interface Props {
   onClearFolderSources: (folderId: number) => void;
   onEditSource: (source: Source) => void;
   onRemoveFromFolder: (sourceId: number) => void;
+  onToggleSourceActive: (sourceId: number, active: boolean) => void;
   readLaterCount?: number;
   totalCount?: number; // 全文总数（用于"全部文章"计数）
   unreadCountInScope?: number; // 当前范围未读数（用于"未读文章"计数）
@@ -136,6 +138,7 @@ export default function Sidebar({
   onClearFolderSources,
   onEditSource,
   onRemoveFromFolder,
+  onToggleSourceActive,
   readLaterCount = 0,
   searchKeyword = '',
   isSearchMode = false,
@@ -299,8 +302,9 @@ export default function Sidebar({
       onRemoveFromFolder,
       onDeleteSource,
       onFetchSource,
+      onToggleActive: onToggleSourceActive,
     });
-  }, [onMarkAllRead, onEditSource, onRenameSource, onMoveSource, onRemoveFromFolder, onDeleteSource, onFetchSource]);
+  }, [onMarkAllRead, onEditSource, onRenameSource, onMoveSource, onRemoveFromFolder, onDeleteSource, onFetchSource, onToggleSourceActive]);
 
   const buildFolderMenuItems = useCallback((folder: Folder): ContextMenuItem[] => {
     return buildSidebarFolderMenu(folder, {
@@ -657,15 +661,19 @@ const SourceRow = React.memo(function SourceRow({
         ? source.lastError ?? '订阅源暂时不可用'
         : source.name;
 
+  // 暂停的源：不参与抓取，未读徽标清零、名称降权、显示暂停标识
+  const paused = !source.active;
+
   return (
     <button
       onClick={onClick}
       onContextMenu={onContextMenu}
-      title={healthTitle}
+      title={paused ? `${healthTitle}（已暂停）` : healthTitle}
       className={cn(
         'group flex w-full flex-col rounded-md py-1.5 pr-2 text-[13px] transition-colors',
         indent ? 'pl-7' : 'pl-2',
-        active ? 'bg-active text-primary' : 'text-secondary hover:bg-hover'
+        active ? 'bg-active text-primary' : 'text-secondary hover:bg-hover',
+        paused && 'opacity-50'
       )}
     >
       <div className="flex w-full items-center gap-2">
@@ -674,12 +682,14 @@ const SourceRow = React.memo(function SourceRow({
           className={cn(
             'truncate',
             health === 'bad' && 'text-danger',
-            health === 'ok' && source.unreadCount > 0 ? 'font-medium text-primary' : ''
+            !paused && health === 'ok' && source.unreadCount > 0 ? 'font-medium text-primary' : ''
           )}
         >
           {source.name}
         </span>
-        {health === 'bad' ? (
+        {paused ? (
+          <PauseCircle size={13} className="ml-auto shrink-0 text-muted" />
+        ) : health === 'bad' ? (
           <AlertTriangle size={13} className="ml-auto shrink-0 text-danger" />
         ) : health === 'warn' ? (
           <AlertTriangle size={13} className="ml-auto shrink-0 text-warning" />
@@ -729,9 +739,19 @@ const FolderNode = React.memo(function FolderNode({
 }) {
   return (
     <div className="mb-0.5">
-      <button
+      {/* 外层用 div + role="button" 承载「选中文件夹」语义，
+          避免 <button> 嵌套 <button>（P2-007：无效 HTML，破坏屏幕阅读器与键盘导航）。 */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onSelect}
         onContextMenu={onContextMenu}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
         className={cn(
           'group flex w-full items-center gap-1.5 rounded-md py-1.5 pl-1.5 pr-2 text-[13px] transition-colors',
           isSelected ? 'bg-active text-primary' : 'text-secondary hover:bg-hover'
@@ -758,7 +778,7 @@ const FolderNode = React.memo(function FolderNode({
             {unread}
           </span>
         )}
-      </button>
+      </div>
 
       {expanded && (
         <div className="ml-3 border-l border-border-subtle pl-1.5">

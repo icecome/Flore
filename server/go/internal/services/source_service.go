@@ -94,6 +94,7 @@ func (s *ReaderService) computeUnreadCountMap() (map[int]int64, error) {
 		Joins("LEFT JOIN Source ON Item.sourceId = Source.id").
 		Where("Item.isRead = ?", false).
 		Where("Source.hideInTimeline = ?", false).
+		Where("Source.active = ?", true).
 		Group("Item.sourceId").
 		Find(&counts).Error; err != nil {
 		return nil, fmt.Errorf("failed to count unread items: %w", err)

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -298,6 +299,64 @@ func (e *SyncEngine) fileProbeHTTPClient() *http.Client {
 		return e.fileHTTPClient
 	}
 	return e.service.BuildFetchHTTPClient()
+}
+
+// FileBackupClient 按当前配置构造 WebDAV 客户端（仅 webdav provider 支持）。
+// 返回 error 时上层转为可读文案；配置缺失或 provider 不支持时给出明确提示。
+func (e *SyncEngine) FileBackupClient() (*rsssync.WebDAVClient, error) {
+	provider := e.service.GetSetting("sync_file_provider")
+	if provider != "webdav" {
+		return nil, fmt.Errorf("file provider %q not supported", provider)
+	}
+	url := e.service.GetSetting("sync_file_url")
+	username := e.service.GetSetting("sync_file_username")
+	password := e.service.GetSetting("sync_file_password")
+	return rsssync.NewWebDAVClient(url, username, password, e.fileProbeHTTPClient())
+}
+
+// ListFileBackups 列出远端 WebDAV 备份目录下的 .zip 备份（按修改时间倒序）。
+func (e *SyncEngine) ListFileBackups(ctx context.Context) ([]rsssync.RemoteBackup, error) {
+	client, err := e.FileBackupClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.ListBackups(ctx)
+}
+
+// UploadBackupToWebDAV 将本地压缩备份推送到远端 WebDAV。data 为 ZIP 字节，name 为远端文件名。
+func (e *SyncEngine) UploadBackupToWebDAV(ctx context.Context, name string, data []byte) error {
+	client, err := e.FileBackupClient()
+	if err != nil {
+		return err
+	}
+	return client.Upload(ctx, name, data)
+}
+
+// DownloadBackupFromWebDAV 从远端 WebDAV 下载指定备份到 w。
+func (e *SyncEngine) DownloadBackupFromWebDAV(ctx context.Context, name string, w io.Writer) error {
+	client, err := e.FileBackupClient()
+	if err != nil {
+		return err
+	}
+	return client.Download(ctx, name, w)
+}
+
+// CreateAndUploadBackupToWebDAV 创建一份本地压缩备份并推送到 WebDAV（云端备份按钮一步完成）。
+// 返回远端文件名。本地备份文件保留在本地备份目录（供本地恢复），远端仅上传其副本。
+func (e *SyncEngine) CreateAndUploadBackupToWebDAV(ctx context.Context) (string, error) {
+	name, err := e.service.CreateCompressedBackup()
+	if err != nil {
+		return "", err
+	}
+	data, err := e.service.ReadBackupFile(name)
+	if err != nil {
+		return "", err
+	}
+	if err := e.UploadBackupToWebDAV(ctx, name, data); err != nil {
+		return "", err
+	}
+	slog.Info("sync engine: backup pushed to webdav", "name", name, "bytes", len(data))
+	return name, nil
 }
 
 // TriggerFullSync 手动触发全量同步：订阅对齐 -> 增量拉取 -> upsert。

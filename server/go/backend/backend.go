@@ -89,10 +89,15 @@ func Start() (*Server, error) {
 	slog.SetDefault(logger)
 	slog.Info("backend log file", "path", logFile)
 
+	apiToken := os.Getenv("FLORE_API_TOKEN")
+
 	if err := database.Init(); err != nil {
-		slog.Error("failed to initialize database", "error", err)
-		_ = logWriter.Close()
-		return nil, err
+		// 数据库损坏或不可读（P0-006）：不静默退出，进入恢复模式。
+		// 恢复服务器仅暴露数据目录信息与备份列表，供前端渲染恢复界面，
+		// 让用户看到「数据库损坏」与可用的 .bak/<timestamp> 快照，而非 onboarding 或退出。
+		slog.Error("database initialization failed, entering recovery mode", "error", err)
+		srv := startRecoveryServer(apiToken, logWriter)
+		return srv, nil
 	}
 	if err := database.AutoMigrate(); err != nil {
 		slog.Error("failed to migrate database", "error", err)
@@ -114,8 +119,6 @@ func Start() (*Server, error) {
 	r.Use(cors.New(buildCORSConfig()))
 	// CSRF 防护：拦截来自不可信源的浏览器写请求。必须注册在 CORS 之后。
 	r.Use(handlers.CSRFProtection())
-
-	apiToken := os.Getenv("FLORE_API_TOKEN")
 
 	s := &Server{
 		logWriter:  logWriter,
@@ -175,7 +178,8 @@ func Start() (*Server, error) {
 	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 		slog.Info("server listening", "addr", ln.Addr().String())
 		if portFile := os.Getenv("FLORE_PORT_FILE"); portFile != "" {
-			if werr := os.WriteFile(portFile, []byte(strconv.Itoa(tcpAddr.Port)), 0644); werr != nil {
+			// 端口文件写入 0600：随机端口不作为安全边界，但应避免被同机其他用户读取。
+			if werr := os.WriteFile(portFile, []byte(strconv.Itoa(tcpAddr.Port)), 0600); werr != nil {
 				slog.Warn("failed to write port file", "path", portFile, "error", werr)
 			}
 		}

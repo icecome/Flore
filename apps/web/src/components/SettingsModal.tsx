@@ -572,17 +572,19 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
       >
         <div
           ref={dialogRef}
-          className="flex h-[740px] max-h-[90vh] w-full max-w-[920px] overflow-hidden rounded-lg border border-border bg-elevated shadow-lg animate-modal-scale-in"
+          className="flex h-[740px] max-h-[90vh] w-full max-w-[920px] flex-col overflow-hidden rounded-lg border border-border bg-elevated shadow-lg animate-modal-scale-in md:flex-row"
           onClick={(e) => e.stopPropagation()}
         >
-          <nav className="flex w-[200px] shrink-0 flex-col border-r border-border bg-canvas p-3">
-            <div className="mb-2 px-2 py-1.5 text-[15px] font-semibold text-primary">设置</div>
+          {/* 标签导航：桌面为左侧 200px 竖排；<768px 变为顶部横向可滚动条，
+              避免 375px 下竖排 rail 与内容互相挤压（P1-006）。 */}
+          <nav className="flex shrink-0 flex-row gap-1 overflow-x-auto border-b border-border bg-canvas p-2 md:mb-0 md:w-[200px] md:flex-col md:overflow-visible md:border-b-0 md:border-r md:p-3">
+            <div className="hidden px-2 py-1.5 text-[15px] font-semibold text-primary md:mb-2 md:block">设置</div>
             {TABS.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id)}
                 className={cn(
-                  'mb-0.5 flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13.5px] transition-colors',
+                  'mb-0.5 flex shrink-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13.5px] transition-colors md:w-full',
                   activeTab === t.id ? 'bg-active font-medium text-primary' : 'text-secondary hover:bg-hover'
                 )}
               >
@@ -595,7 +597,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
           </nav>
 
           <div className="flex min-w-0 flex-1 flex-col bg-surface">
-            <div className="flex h-[56px] shrink-0 items-center justify-between border-b border-border px-6">
+            <div className="flex h-[56px] shrink-0 items-center justify-between border-b border-border px-4 md:px-6">
               <h2 className="text-[16px] font-semibold text-primary">
                 {TABS.find((t) => t.id === activeTab)?.label}
               </h2>
@@ -607,7 +609,7 @@ export default function SettingsModal({ settings, onSettingsChange, onClose, onS
                 <X size={18} />
               </button>
             </div>
-            <div ref={contentRef} className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 py-5">
+            <div ref={contentRef} className="flex-1 min-h-0 flex flex-col overflow-hidden px-4 py-4 md:px-6 md:py-5">
               {renderTab()}
             </div>
           </div>
